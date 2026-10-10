@@ -2,7 +2,7 @@ if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "4.0")
     set(CMAKE_POLICY_VERSION_MINIMUM 3.10 CACHE STRING "" FORCE)
 endif()
 
-#
+# Test only: changes the deps cache key.
 # This CMake project downloads, configures and builds OrcaSlicer dependencies on Unix and Windows.
 #
 # When using this script, it's recommended to perform an out-of-source build using CMake.
