@@ -38,7 +38,7 @@ jobs:
   request:
     # Skips the job unless a PR comment mentions the command.
     if: >-
-      github.repository == 'OrcaSlicer/OrcaSlicer'
+      github.repository == 'HanifKoh/OrcaSlicer'
       && github.event_name == 'issue_comment'
       && github.event.issue.pull_request != null
       && contains(github.event.comment.body, '/bot fix-tidy')
@@ -123,7 +123,7 @@ jobs:
   suggest:
     # The fix run's re-runs only. Its first attempt makes no fix.
     if: >-
-      github.repository == 'OrcaSlicer/OrcaSlicer'
+      github.repository == 'HanifKoh/OrcaSlicer'
       && github.event_name == 'workflow_run'
       && github.event.workflow_run.name == 'clang-tidy fix'
       && github.event.workflow_run.event == 'pull_request'
@@ -404,7 +404,7 @@ jobs:
 
   nudge:
     if: >-
-      github.repository == 'OrcaSlicer/OrcaSlicer'
+      github.repository == 'HanifKoh/OrcaSlicer'
       && github.event_name == 'workflow_run'
       && github.event.workflow_run.name == 'clang-tidy'
       && github.event.workflow_run.event == 'pull_request'
