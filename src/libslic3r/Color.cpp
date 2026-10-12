@@ -434,3 +434,7 @@ unsigned char picking_checksum_alpha_channel(unsigned char red, unsigned char gr
 
 } // namespace Slic3r
 
+
+namespace Slic3r {
+std::string_view tidy_bot_probe() { return std::string_view("x"); }
+}
