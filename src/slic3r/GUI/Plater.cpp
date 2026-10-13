@@ -5869,6 +5869,7 @@ void Sidebar::delete_filament(size_t filament_id, int replace_filament_id) {
     if (auto* opt = wxGetApp().preset_bundle->project_config.option<ConfigOptionBools>("filament_is_mixed"))
         is_mixed_snapshot = opt->values;
 
+    const size_t slots_before_delete = wxGetApp().preset_bundle->num_filament_slots();
     wxGetApp().preset_bundle->update_num_filaments(filament_id);
 
     // filament_count only counts physical combos, so with mixed slots present it is not the
@@ -5876,6 +5877,9 @@ void Sidebar::delete_filament(size_t filament_id, int replace_filament_id) {
     size_t total_after_delete = wxGetApp().preset_bundle->filament_presets.size();
     wxGetApp().plater()->get_partplate_list().on_filament_deleted(total_after_delete, filament_id);
     wxGetApp().plater()->on_filaments_delete(total_after_delete, filament_id, replace_filament_id > (int)filament_id ? (replace_filament_id - 1) : replace_filament_id, is_mixed_snapshot);
+    // A tool changer keeps one slot per nozzle, so the bundle may have put a slot back ahead of
+    // the mixed tail; the model follows that move after the delete's own renumbering.
+    wxGetApp().plater()->sync_filament_slots_from_bundle(slots_before_delete - 1);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
 
@@ -5948,69 +5952,10 @@ void Sidebar::add_custom_filament(wxColour new_col, const std::string& preset_na
     size_t      total          = insert_pos + bundle->num_mixed_filaments();
     int         filament_count = (int)(total + 1);
     std::string new_color      = new_col.GetAsString(wxC2S_HTML_SYNTAX).ToStdString();
-    bundle->set_num_filaments(filament_count, new_color);
-
-    // Maintain physical-first ordering: rotate the new slot from end to insert_pos.
-    // No mixed slots -> insert_pos == total -> every rotate below is a no-op.
-    if (insert_pos < total) {
-        auto& presets = wxGetApp().preset_bundle->filament_presets;
-        std::rotate(presets.begin() + insert_pos, presets.begin() + total, presets.end());
-
-        auto& project_config = wxGetApp().preset_bundle->project_config;
-        auto& ams_mc = wxGetApp().preset_bundle->ams_multi_color_filment;
-
-        auto rotate_strings = [&](const char* key) {
-            if (auto* opt = project_config.option<ConfigOptionStrings>(key))
-                if (opt->values.size() > total)
-                    std::rotate(opt->values.begin() + insert_pos, opt->values.begin() + total, opt->values.end());
-        };
-        auto rotate_ints = [&](const char* key) {
-            if (auto* opt = project_config.option<ConfigOptionInts>(key))
-                if (opt->values.size() > total)
-                    std::rotate(opt->values.begin() + insert_pos, opt->values.begin() + total, opt->values.end());
-        };
-        auto rotate_bools = [&](const char* key) {
-            if (auto* opt = project_config.option<ConfigOptionBools>(key))
-                if (opt->values.size() > total)
-                    std::rotate(opt->values.begin() + insert_pos, opt->values.begin() + total, opt->values.end());
-        };
-
-        rotate_strings("filament_colour");
-        rotate_strings("filament_multi_colour");
-        rotate_strings("filament_colour_type");
-        rotate_ints("filament_map");
-        rotate_ints("filament_nozzle_map");
-        rotate_ints("filament_volume_map");
-        rotate_bools("filament_is_mixed");
-        rotate_strings("filament_mixed_components");
-        rotate_strings("filament_mixed_sublayer_ratios");
-        rotate_bools("filament_mixed_gradient");
-        rotate_strings("filament_mixed_gradient_range");
-        rotate_strings("filament_mixed_gradient_curve");
-        rotate_bools("filament_mixed_gradient_per_part");
-
-        if (ams_mc.size() > total)
-            std::rotate(ams_mc.begin() + insert_pos, ams_mc.begin() + total, ams_mc.end());
-
-        // Remap object/volume extruder IDs and paint data: anything >= insert_pos+1 (1-based) shifts up by 1
-        int threshold_1based = (int)(insert_pos + 1);
-        auto ebt_threshold = EnforcerBlockerType(threshold_1based);
-        for (auto* obj : wxGetApp().plater()->model().objects) {
-            if (obj->config.has("extruder")) {
-                int ext = obj->config.extruder();
-                if (ext >= threshold_1based)
-                    obj->config.set("extruder", ext + 1);
-            }
-            for (auto* vol : obj->volumes) {
-                if (vol->config.has("extruder")) {
-                    int ext = vol->config.extruder();
-                    if (ext >= threshold_1based)
-                        vol->config.set("extruder", ext + 1);
-                }
-                vol->mmu_segmentation_facets.shift_states_above(*vol, ebt_threshold, +1);
-            }
-        }
-    }
+    const std::map<int, int> moved = bundle->insert_filament_slot(insert_pos, new_color);
+    bundle->update_multi_material_filament_presets();
+    // The mixed slots behind the new one moved up: re-point the model's extruder ids and paint.
+    Slic3r::remap_model_filament_slots(wxGetApp().plater()->model(), moved);
 
     if (!preset_name.empty() &&
         wxGetApp().preset_bundle->filaments.find_preset(preset_name, false) &&
@@ -8511,28 +8456,33 @@ bool Plater::get_enable_wrapping_detection()
 
 wxColour Plater::get_next_color_for_filament()
 {
-    static int curr_color_filamenet = 0;
-    // refs to https://www.ebaomonthly.com/window/photo/lesson/colorList.htm
-    wxColour colors[FILAMENT_SYSTEM_COLORS_NUM] = {
-        // ORCA updated all color palette
-        wxColour("#00C1AE"),
-        wxColour("#F4E2C1"),
-        wxColour("#ED1C24"),
-        wxColour("#00FF7F"),
-        wxColour("#F26722"),
-        wxColour("#FFEB31"),
-        wxColour("#7841CE"),
-        wxColour("#115877"),
-        wxColour("#ED1E79"),
-        wxColour("#2EBDEF"),
-        wxColour("#345B2F"),
-        wxColour("#800080"),
-        wxColour("#FA8173"),
-        wxColour("#800000"),
-        wxColour("#F7B763"),
-        wxColour("#A4C41E"),
-    };
-    return colors[curr_color_filamenet++ % FILAMENT_SYSTEM_COLORS_NUM];
+    return wxColour(wxGetApp().preset_bundle->next_filament_colour());
+}
+
+void Plater::apply_pending_filament_slot_relocations()
+{
+    const std::map<int, int> moved = wxGetApp().preset_bundle->take_pending_slot_relocations();
+    if (!moved.empty())
+        Slic3r::remap_model_filament_slots(model(), moved);
+}
+
+void Plater::sync_filament_slots_from_bundle(size_t slots_before)
+{
+    apply_pending_filament_slot_relocations();
+    auto        *bundle = wxGetApp().preset_bundle;
+    const size_t slots  = bundle->num_filament_slots();
+    if (slots <= slots_before)
+        return;
+    // The same steps Sidebar::add_custom_filament takes for one slot, for each slot the bundle
+    // added: the new physical slots sit just ahead of the mixed tail.
+    for (size_t slot = slots_before; slot < slots; ++slot)
+        get_partplate_list().on_filament_added(static_cast<int>(slot + 1));
+    on_filament_count_change(slots);
+    wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
+    bundle->export_selections(*wxGetApp().app_config);
+    const size_t first_new = bundle->num_physical_filaments() - (slots - slots_before);
+    for (size_t slot = first_new; slot < bundle->num_physical_filaments(); ++slot)
+        sidebar().auto_calc_flushing_volumes(static_cast<int>(slot));
 }
 
 wxString Plater::get_slice_warning_string(GCodeProcessorResult::SliceWarning& warning)
@@ -9620,6 +9570,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                     for (std::string& id : ids->values)
                                         id = agent->to_orca_filament_id(id);
                             }
+                            // Only this load's slot moves may reach the model parsed below.
+                            preset_bundle->take_pending_slot_relocations();
                             preset_bundle->load_config_model(filename.string(), std::move(config), file_version, &published_config);
                             if (config_loaded_out != nullptr)
                                 *config_loaded_out = true;
@@ -9632,6 +9584,10 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // Runs before the objects are handed over to the plater below.
                             if (load_model && !published_config.mixed_slot_relocations.empty())
                                 Slic3r::remap_model_filament_slots(model, published_config.mixed_slot_relocations);
+                            // The same for physical slots the nozzle-count top-up inserted ahead of
+                            // the project's mixed tail while the presets loaded.
+                            if (const std::map<int, int> moved = preset_bundle->take_pending_slot_relocations(); load_model && !moved.empty())
+                                Slic3r::remap_model_filament_slots(model, moved);
 
                             // BBS: notify the user about published settings that could not be applied.
                             if (!published_config.skipped_keys.empty()) {
@@ -10831,6 +10787,8 @@ void Plater::priv::reset(bool apply_presets_change, bool reload_presets)
     Plater::TakeSnapshot snapshot(q, _u8L("Reset Project"), UndoRedo::SnapshotType::ProjectSeparator);
 
     clear_warnings();
+    // Slot moves recorded against the project being closed do not apply to the next one.
+    wxGetApp().preset_bundle->take_pending_slot_relocations();
 
     const std::string closed_project_name = into_u8(get_project_filename());
     if (!closed_project_name.empty() || !model.objects.empty()) {

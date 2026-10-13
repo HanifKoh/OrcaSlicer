@@ -9439,23 +9439,11 @@ void GUI_App::load_current_presets(bool active_preset_combox/*= false*/, bool ch
 
     auto& edited_printer_preset = preset_bundle->printers.get_edited_preset();
     PrinterTechnology printer_technology = edited_printer_preset.printer_technology();
-    // ORCA: Sync filament count with the printer's nozzle count before loading presets for multi-tool printers.
-    // This ensures filament_presets vector is properly sized when combo boxes are created/updated.
-    if (printer_technology == ptFFF && !edited_printer_preset.config.opt_bool("single_extruder_multi_material")) {
-        auto* nozzle_diameter = edited_printer_preset.config.option<ConfigOptionFloats>("nozzle_diameter");
-        if (nozzle_diameter) {
-            // Mixed-color slots are virtual filaments kept at the tail of the list, so they have no
-            // nozzle of their own and the count has to allow for them. Only ever grow: this sizes
-            // the list so the combo boxes have something to bind to, and set_num_filaments() trims
-            // at the raw tail, so shrinking here would eat the mixes rather than the surplus
-            // physical slots. A list longer than the nozzle count is a state the app reaches
-            // legitimately - raising the extruder count and not saving the printer preset leaves
-            // exactly that on the next start - and losing the project's mixes to it is worse than
-            // carrying a filament the printer has no nozzle for until the count is next changed.
-            const size_t target = nozzle_diameter->values.size() + preset_bundle->num_mixed_filaments();
-            if (target > preset_bundle->filament_presets.size())
-                preset_bundle->set_num_filaments(target);
-        }
+    // One physical filament slot per nozzle: the bundle adds the missing slots itself, and a slot
+    // it moved ahead of the project's mixed tail is re-pointed in the model here.
+    if (printer_technology == ptFFF) {
+        preset_bundle->update_multi_material_filament_presets();
+        this->plater()->apply_pending_filament_slot_relocations();
     }
 	this->plater()->set_printer_technology(printer_technology);
     for (Tab *tab : tabs_list)
