@@ -55,7 +55,6 @@
 #include "libslic3r/CutUtils.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
 
-#define FILAMENT_SYSTEM_COLORS_NUM      16
 
 class wxButton;
 class ScalableButton;
@@ -444,6 +443,12 @@ public:
     bool                               get_enable_wrapping_detection();
 
     static wxColour get_next_color_for_filament();
+    // Re-point the model at slots the preset bundle moved on its own (see
+    // PresetBundle::take_pending_slot_relocations).
+    void apply_pending_filament_slot_relocations();
+    // After the bundle grew the slot list by itself (printer with more nozzles than the project
+    // has physical filaments): re-point the model, then size the plates and the sidebar to it.
+    void sync_filament_slots_from_bundle(size_t slots_before);
     static wxString get_slice_warning_string(GCodeProcessorResult::SliceWarning& warning);
 
     bool preview_zip_archive(const boost::filesystem::path& archive_path);
