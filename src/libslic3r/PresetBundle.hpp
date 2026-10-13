@@ -445,11 +445,28 @@ public:
         PresetBundle &m_bundle;
     };
 
-    // n is the total slot count, and growth appends at the raw tail - which is where the mixed
-    // slots live. A caller adding physical filaments has to add num_mixed_filaments() on top and
-    // then move the new slots ahead of the mixed tail, as Sidebar::add_custom_filament does.
+    // Filament slots. The project has num_filament_slots() slots: filament_presets names each
+    // slot's preset and every array in filament_slot_keys() holds one value per slot, with the
+    // mixed-colour slots at the tail. Only the functions below change the slot count, so the preset
+    // list and the arrays cannot drift apart.
+    static const std::vector<std::string> &filament_slot_keys();
+    size_t          num_filament_slots() const { return filament_presets.size(); }
+    // n is the total slot count. Growth appends at the raw tail, where the mixed slots live, so a
+    // caller adding a physical filament uses insert_filament_slot instead. New slots take new_col,
+    // or the next palette colour when it is empty.
     void            set_num_filaments(unsigned int n, std::string new_col = "");
-    void         update_num_filaments(unsigned int to_del_flament_id);
+    void            update_num_filaments(unsigned int to_del_flament_id);
+    // Insert one physical slot at pos with the given or the next palette colour, copying the preset
+    // of the slot before it. Returns old -> new index (0-based) of every slot that moved up, for the
+    // caller to apply to its model with remap_model_filament_slots.
+    std::map<int, int> insert_filament_slot(size_t pos, const std::string &colour = std::string());
+    // Slots the nozzle-count top-up moved on its own (physical slots inserted ahead of the mixed
+    // tail). The owner of the model takes and applies them; the record is empty afterwards.
+    std::map<int, int> take_pending_slot_relocations();
+    // Next colour of the fixed palette: one sequence for every slot added without a colour.
+    std::string     next_filament_colour();
+    // True when every slot array holds exactly num_filament_slots() values.
+    bool            filament_slots_consistent() const;
 
     void get_ams_cobox_infos(AMSComboInfo &combox_info);
     unsigned int sync_ams_list(std::vector<std::pair<DynamicPrintConfig *,std::string>> &unknowns, bool use_map, std::map<int, AMSMapInfo> &maps, bool enable_append, MergeFilamentInfo &merge_info, bool color_only = false);
@@ -736,6 +753,11 @@ private:
     // nozzles (single_extruder_multi_material, e.g. a Bambu Lab H2D) maps any number of them onto
     // its nozzles, so one is enough, and the user may delete down to it.
     size_t min_filament_count() const;
+    // Size every slot array to n. Entries beyond the colour array's old length count as new and
+    // are seeded: colours with new_colour or the palette, maps and flags with their slot defaults.
+    void                resize_filament_slot_arrays(size_t n, const std::string &new_colour);
+    std::map<int, int>  m_pending_slot_relocations;
+    size_t              m_next_palette_colour = 0;
 
     // Move the presets and vendor profiles of `others` into this bundle, in one pass
     // over each collection. A preset whose name this bundle or an earlier one of

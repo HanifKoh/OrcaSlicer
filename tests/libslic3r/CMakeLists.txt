@@ -35,6 +35,7 @@ add_executable(${_TEST_NAME}_tests
     test_parallel_resolve.cpp
     test_printconfigcardinality.cpp
     test_preset_bundle_loading.cpp
+    test_filament_slots.cpp
     test_preset_setting_id.cpp
     test_preset_diff.cpp
     test_vendor_cache.cpp

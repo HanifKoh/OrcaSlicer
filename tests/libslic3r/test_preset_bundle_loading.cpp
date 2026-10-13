@@ -5497,66 +5497,6 @@ TEST_CASE("Adding a filament preserves slots with incomplete mixed metadata", "[
     }
 }
 
-// On a tool changer the nozzle-count top-up in update_multi_material_filament_presets() grows
-// filament_presets on its own, so a physical count derived from that list reports a slot no
-// per-filament array has yet. That is what made the extruder-count handler conclude there was
-// nothing to add and leave the new sidebar combo with no colour to draw.
-TEST_CASE("The physical filament count is not fooled by a lone filament_presets top-up", "[Preset][Bundle][FilamentMixer]")
-{
-    PresetBundle bundle;
-    // The extruder-count handler that adds filaments runs on tool changers only.
-    bundle.printers.get_edited_preset().config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
-
-    SECTION("no mixed slots") {
-        bundle.set_num_filaments(4u, std::string("#FF0000"));
-        bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-            { 0.4, 0.4, 0.4, 0.4, 0.4 };
-        bundle.update_multi_material_filament_presets();
-
-        REQUIRE(bundle.filament_presets.size() == 5);   // the top-up moved this list on its own
-        REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 4);
-        CHECK(bundle.num_physical_filaments() == 4);
-    }
-
-    SECTION("behind a mixed tail") {
-        bundle.set_num_filaments(5u, std::string("#FF0000"));
-        bundle.project_config.option<ConfigOptionBools>("filament_is_mixed")->values =
-            { false, false, false, false, true };
-        bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-            { 0.4, 0.4, 0.4, 0.4, 0.4, 0.4 };
-        bundle.update_multi_material_filament_presets();
-
-        REQUIRE(bundle.filament_presets.size() == 6);
-        REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 5);
-        CHECK(bundle.num_physical_filaments() == 4);
-        CHECK(bundle.num_mixed_filaments() == 1);
-    }
-}
-
-// Which slots are new is a fact about the per-filament arrays, not about filament_presets, for the
-// same reason. Keyed off the wrong one, a freshly opened slot silently keeps filament 1's colour.
-TEST_CASE("New filament colours are placed by array position", "[Preset][Bundle][FilamentMixer]")
-{
-    PresetBundle bundle;
-    bundle.printers.get_edited_preset().config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
-    bundle.set_num_filaments(4u, std::string("#FF0000"));
-    bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-        { 0.4, 0.4, 0.4, 0.4, 0.4 };
-    bundle.update_multi_material_filament_presets();
-    REQUIRE(bundle.filament_presets.size() == 5);
-    REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 4);
-
-    // The call Sidebar::add_custom_filament makes once the extruder count opens a slot.
-    bundle.set_num_filaments(5u, std::string("#00FF00"));
-
-    const auto &colours = bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values;
-    REQUIRE(colours.size() == 5);
-    CHECK(colours[4] == "#00FF00");   // not colours[0], which resize() would have padded with
-}
-
-// The mixed-slot flags are written into the app config on exit and read back on the next start.
-// If the read side loses them the slots survive as filaments but stop being mixes, so the project
-// comes back with the mix showing as an ordinary physical filament.
 TEST_CASE("A saved mix is still a mix after an app restart", "[Preset][Bundle][FilamentMixer]")
 {
     AppConfig app_config;

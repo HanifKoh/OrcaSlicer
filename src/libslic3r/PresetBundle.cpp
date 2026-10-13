@@ -4325,51 +4325,155 @@ void PresetBundle::export_selections(AppConfig &config)
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": printer %1%, print %2%, filaments[0] %3% ")%printers.get_selected_preset_name() % prints.get_selected_preset_name() %filament_presets[0];
 }
 
-void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
+// --- Filament slots ----------------------------------------------------------------------------
+
+const std::vector<std::string> &PresetBundle::filament_slot_keys()
 {
-    unsigned old_filament_count = this->filament_presets.size();
-    if (n > old_filament_count && old_filament_count != 0)
-        filament_presets.resize(n, filament_presets.back());
-    else {
-        filament_presets.resize(n);
-    }
-    ConfigOptionStrings* filament_color = project_config.option<ConfigOptionStrings>("filament_colour");
-    ConfigOptionStrings *filament_multi_color = project_config.option<ConfigOptionStrings>("filament_multi_colour");
-    ConfigOptionStrings* filament_color_type = project_config.option<ConfigOptionStrings>("filament_colour_type");
-    ConfigOptionInts* filament_map = project_config.option<ConfigOptionInts>("filament_map");
-    ConfigOptionInts* filament_nozzle_map = project_config.option<ConfigOptionInts>("filament_nozzle_map");
-    ConfigOptionInts* filament_volume_map = project_config.option<ConfigOptionInts>("filament_volume_map");
+    static const std::vector<std::string> keys = {
+        "filament_colour",
+        "filament_colour_type",
+        "filament_multi_colour",
+        "filament_map",
+        "filament_nozzle_map",
+        "filament_volume_map",
+        "filament_is_mixed",
+        "filament_mixed_components",
+        "filament_mixed_sublayer_ratios",
+        "filament_mixed_gradient",
+        "filament_mixed_gradient_range",
+        "filament_mixed_gradient_curve",
+        "filament_mixed_gradient_per_part",
+    };
+    return keys;
+}
 
-    // Which slots are new is a fact about the arrays below, not about filament_presets:
-    // on a tool changer, update_multi_material_filament_presets() tops that list up to the tool
-    // count on its own, so it can already sit at the new size while every array below is still at
-    // the old one.
-    const size_t old_slot_count = filament_color->values.size();
-
-    filament_color->resize(n);
-    // Sync filament multi colour
-    filament_multi_color->values.resize(n);
-    for (size_t i = 0; i < n; i++) {
-        filament_multi_color->values[i] = filament_color->values[i];
+// Run f on the value vector of a slot array, whatever its element type.
+template<typename F> static void with_slot_values(ConfigOption *opt, F &&f)
+{
+    switch (opt->type()) {
+    case coStrings: f(static_cast<ConfigOptionStrings *>(opt)->values); break;
+    case coInts:    f(static_cast<ConfigOptionInts *>(opt)->values); break;
+    case coBools:   f(static_cast<ConfigOptionBools *>(opt)->values); break;
+    default:        assert(false);
     }
-    filament_color_type->resize(n);
-    filament_map->values.resize(n, 1);
-    filament_nozzle_map->values.resize(n, 0);
-    filament_volume_map->values.resize(n, static_cast<int>(NozzleVolumeType::nvtStandard));
+}
+
+std::string PresetBundle::next_filament_colour()
+{
+    static const char *const palette[] = {
+        "#00C1AE", "#F4E2C1", "#ED1C24", "#00FF7F", "#F26722", "#FFEB31", "#7841CE", "#115877",
+        "#ED1E79", "#2EBDEF", "#345B2F", "#800080", "#FA8173", "#800000", "#F7B763", "#A4C41E",
+    };
+    return palette[m_next_palette_colour++ % (sizeof(palette) / sizeof(palette[0]))];
+}
+
+bool PresetBundle::filament_slots_consistent() const
+{
+    const size_t n = num_filament_slots();
+    for (const std::string &key : filament_slot_keys()) {
+        const auto *opt = dynamic_cast<const ConfigOptionVectorBase *>(project_config.option(key));
+        if (opt == nullptr || opt->size() != n)
+            return false;
+    }
+    return ams_multi_color_filment.size() == n;
+}
+
+void PresetBundle::resize_filament_slot_arrays(size_t n, const std::string &new_colour)
+{
+    // Which slots are new is a fact about the colour array, not about filament_presets: a bundle
+    // that has not been given its selections yet runs the preset list ahead of the arrays.
+    auto        *colours = project_config.option<ConfigOptionStrings>("filament_colour", true);
+    const size_t old_n   = colours->values.size();
+    colours->values.resize(n);
+    for (size_t i = old_n; i < n; ++i)
+        colours->values[i] = new_colour.empty() ? next_filament_colour() : new_colour;
+
+    // Every other array keeps its first old_n values and is sized to n; an array that was shorter
+    // than the colours gets the missing entries seeded as well.
+    std::map<std::string, size_t> kept;
+    for (const std::string &key : filament_slot_keys()) {
+        if (key == "filament_colour")
+            continue;
+        with_slot_values(project_config.option(key, true), [&kept, &key, old_n, n](auto &values) {
+            kept[key] = std::min(old_n, values.size());
+            values.resize(kept[key]);
+            values.resize(n);
+        });
+    }
+    ams_multi_color_filment.resize(std::min(old_n, ams_multi_color_filment.size()));
     ams_multi_color_filment.resize(n);
 
-    resize_mixed_filament_metadata(project_config, old_slot_count, n);
+    auto *colour_types = project_config.option<ConfigOptionStrings>("filament_colour_type");
+    auto *maps         = project_config.option<ConfigOptionInts>("filament_map");
+    auto *volume_maps  = project_config.option<ConfigOptionInts>("filament_volume_map");
+    for (size_t i = kept["filament_colour_type"]; i < n; ++i)
+        colour_types->values[i] = "1";
+    for (size_t i = kept["filament_map"]; i < n; ++i)
+        maps->values[i] = 1;
+    for (size_t i = kept["filament_volume_map"]; i < n; ++i)
+        volume_maps->values[i] = static_cast<int>(NozzleVolumeType::nvtStandard);
+    // A kept slot keeps its colour pack; only a new or missing entry starts as the single colour.
+    auto *multi_colours = project_config.option<ConfigOptionStrings>("filament_multi_colour");
+    for (size_t i = kept["filament_multi_colour"]; i < n; ++i)
+        multi_colours->values[i] = colours->values[i];
+}
 
-    //BBS set new filament color to new_color
-    if (!new_color.empty()) {
-        for (size_t i = old_slot_count; i < n; i++) {
-            filament_color->values[i] = new_color;
-            filament_multi_color->values[i] = new_color;
-            filament_color_type->values[i]  = "1";  // default color type
-        }
-    }
-
+void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
+{
+    const size_t old_filament_count = this->filament_presets.size();
+    if (n > old_filament_count && old_filament_count != 0)
+        filament_presets.resize(n, filament_presets.back());
+    else
+        filament_presets.resize(n);
+    resize_filament_slot_arrays(n, new_color);
     update_multi_material_filament_presets();
+}
+
+std::map<int, int> PresetBundle::insert_filament_slot(size_t pos, const std::string &colour)
+{
+    const size_t n = num_filament_slots();
+    pos            = std::min(pos, n);
+    filament_presets.insert(filament_presets.begin() + pos,
+                            pos > 0 ? filament_presets[pos - 1] : filaments.first_visible().name);
+    // Append the seeded slot at the tail, then rotate it into place.
+    resize_filament_slot_arrays(n, std::string());
+    resize_filament_slot_arrays(n + 1, colour);
+    const auto rotate_in = [pos, n](auto &values) { std::rotate(values.begin() + pos, values.begin() + n, values.end()); };
+    for (const std::string &key : filament_slot_keys())
+        with_slot_values(project_config.option(key), rotate_in);
+    rotate_in(ams_multi_color_filment);
+
+    std::map<int, int> moved;
+    for (size_t i = pos; i < n; ++i)
+        moved.emplace(static_cast<int>(i), static_cast<int>(i + 1));
+    return moved;
+}
+
+std::map<int, int> PresetBundle::take_pending_slot_relocations()
+{
+    std::map<int, int> moved;
+    for (const auto &[from, to] : m_pending_slot_relocations)
+        if (from != to)
+            moved.emplace(from, to);
+    m_pending_slot_relocations.clear();
+    return moved;
+}
+
+// Record `moved` (current -> new index) on top of the moves already pending, so the record keeps
+// mapping each slot's original index to where it is now.
+static void compose_slot_relocations(std::map<int, int> &pending, const std::map<int, int> &moved)
+{
+    std::map<int, int> composed = pending;
+    for (const auto &[current, next] : moved) {
+        int original = current;
+        for (const auto &[from, to] : pending)
+            if (to == current) {
+                original = from;
+                break;
+            }
+        composed[original] = next;
+    }
+    pending = std::move(composed);
 }
 
 void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
@@ -4392,44 +4496,6 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
         }
     }
 
-    ConfigOptionStrings *filament_color = project_config.option<ConfigOptionStrings>("filament_colour");
-    ConfigOptionStrings *filament_multi_color = project_config.option<ConfigOptionStrings>("filament_multi_colour");
-    ConfigOptionStrings *filament_color_type  = project_config.option<ConfigOptionStrings>("filament_colour_type");
-    ConfigOptionInts* filament_map = project_config.option<ConfigOptionInts>("filament_map");
-    ConfigOptionInts* filament_nozzle_map = project_config.option<ConfigOptionInts>("filament_nozzle_map");
-    ConfigOptionInts* filament_volume_map = project_config.option<ConfigOptionInts>("filament_volume_map");
-    if (filament_color->values.size() > to_del_flament_id) {
-        filament_color->values.erase(filament_color->values.begin() + to_del_flament_id);
-        if (filament_map->values.size() > to_del_flament_id) {
-            filament_map->values.erase(filament_map->values.begin() + to_del_flament_id);
-        }
-        if (filament_nozzle_map->values.size() > to_del_flament_id) {
-            filament_nozzle_map->values.erase(filament_nozzle_map->values.begin() + to_del_flament_id);
-        }
-        if (filament_volume_map->values.size() > to_del_flament_id) {
-            filament_volume_map->values.erase(filament_volume_map->values.begin() + to_del_flament_id);
-        }
-    }
-    else {
-        filament_color->values.resize(to_del_flament_id);
-        filament_map->values.resize(to_del_flament_id, 1);
-        filament_nozzle_map->values.resize(to_del_flament_id, 0);
-        filament_volume_map->values.resize(to_del_flament_id, static_cast<int>(NozzleVolumeType::nvtStandard));
-    }
-
-    // lambda function to erase or resize the container
-    auto erase_or_resize = [to_del_flament_id](auto& container) {
-        if (container.size() > to_del_flament_id) {
-            container.erase(container.begin() + to_del_flament_id);
-        } else {
-            container.resize(to_del_flament_id);
-        }
-    };
-
-    erase_or_resize(filament_multi_color->values);
-    erase_or_resize(filament_color_type->values);
-    erase_or_resize(ams_multi_color_filment);
-
     // Mixed-color metadata. Component IDs reference other slots by 1-based index, so a deleted
     // *physical* filament must be remapped out of every mix before the arrays themselves shrink.
     // Deleting a mixed slot needs no remap (nothing references a mixed slot as a component).
@@ -4443,21 +4509,17 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
                 remap_mixed_components_on_delete(is_mixed_opt->values, comp_opt->values,
                                                  to_del_flament_id + 1);
         }
-        if (is_mixed_opt)
-            erase_or_resize(is_mixed_opt->values);
-        if (comp_opt)
-            erase_or_resize(comp_opt->values);
     }
-    if (auto *opt = project_config.option<ConfigOptionStrings>("filament_mixed_sublayer_ratios"))
-        erase_or_resize(opt->values);
-    if (auto *opt = project_config.option<ConfigOptionBools>("filament_mixed_gradient"))
-        erase_or_resize(opt->values);
-    if (auto *opt = project_config.option<ConfigOptionStrings>("filament_mixed_gradient_range"))
-        erase_or_resize(opt->values);
-    if (auto *opt = project_config.option<ConfigOptionStrings>("filament_mixed_gradient_curve"))
-        erase_or_resize(opt->values);
-    if (auto *opt = project_config.option<ConfigOptionBools>("filament_mixed_gradient_per_part"))
-        erase_or_resize(opt->values);
+
+    const auto erase_or_resize = [to_del_flament_id](auto &values) {
+        if (values.size() > to_del_flament_id)
+            values.erase(values.begin() + to_del_flament_id);
+        else
+            values.resize(to_del_flament_id);
+    };
+    for (const std::string &key : filament_slot_keys())
+        with_slot_values(project_config.option(key, true), erase_or_resize);
+    erase_or_resize(ams_multi_color_filment);
 
     update_multi_material_filament_presets(to_del_flament_id);
 }
@@ -4468,21 +4530,18 @@ bool PresetBundle::is_mixed_filament(size_t idx) const
     return opt && idx < opt->values.size() && opt->values[idx];
 }
 
+// Imported projects may have fewer mixed flags than slots. Missing flags mean physical filaments.
 size_t PresetBundle::num_mixed_filaments() const
 {
     const auto *opt = project_config.option<ConfigOptionBools>("filament_is_mixed");
     if (opt == nullptr)
         return 0;
-    const size_t slot_count = project_config.option<ConfigOptionStrings>("filament_colour")->values.size();
-    return size_t(std::count(opt->values.begin(), opt->values.begin() + std::min(slot_count, opt->values.size()), true));
+    return size_t(std::count(opt->values.begin(), opt->values.begin() + std::min(num_filament_slots(), opt->values.size()), true));
 }
 
-// Colours describe actual slots; on a tool changer filament_presets can be topped up to the tool count alone.
-// Imported projects may have fewer mixed flags than slots. Missing flags mean physical filaments.
 size_t PresetBundle::num_physical_filaments() const
 {
-    const auto *colors = project_config.option<ConfigOptionStrings>("filament_colour");
-    return colors->values.size() - num_mixed_filaments();
+    return num_filament_slots() - num_mixed_filaments();
 }
 
 std::vector<size_t> PresetBundle::physical_filament_config_indices() const
@@ -6969,56 +7028,15 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
                     published_config->material_replacements.emplace_back(
                         (boost::format(L("slot %1%: %2% -> %3%")) % slot % aliased_name % replacement).str());
                 }
-                // Grow the per-slot colour/type/map project vectors to the new slot count and
-                // seed the new entries so the slots render with colours instead of blank chips
-                // (mirrors set_num_filaments; existing values are left untouched).
+                // Grow the per-slot project arrays to the new slot count and seed the new entries
+                // so the slots render with colours instead of blank chips. Grow-only: the
+                // receiver's slot count never shrinks below its own setup.
                 ConfigOptionStrings* proj_colour       = this->project_config.opt<ConfigOptionStrings>("filament_colour");
                 ConfigOptionStrings* proj_multi_colour = this->project_config.opt<ConfigOptionStrings>("filament_multi_colour");
                 ConfigOptionStrings* proj_colour_type  = this->project_config.opt<ConfigOptionStrings>("filament_colour_type");
-                ConfigOptionInts* proj_map             = this->project_config.opt<ConfigOptionInts>("filament_map");
-                ConfigOptionInts* proj_nozzle_map      = this->project_config.opt<ConfigOptionInts>("filament_nozzle_map");
-                ConfigOptionInts* proj_volume_map      = this->project_config.opt<ConfigOptionInts>("filament_volume_map");
                 const size_t old_colour_count          = (proj_colour != nullptr) ? proj_colour->values.size() : 0;
-                // Grow-only: an already-larger project vector is left untouched (the receiver's
-                // slot count never shrinks below its own setup).
-                if (proj_colour && proj_colour->values.size() < target_slots)
-                    proj_colour->resize(target_slots);
-                if (proj_multi_colour && proj_multi_colour->values.size() < target_slots)
-                    proj_multi_colour->values.resize(target_slots);
-                if (proj_colour_type && proj_colour_type->values.size() < target_slots)
-                    proj_colour_type->values.resize(target_slots);
-                if (proj_map && proj_map->values.size() < target_slots)
-                    proj_map->values.resize(target_slots, 1);
-                if (proj_nozzle_map && proj_nozzle_map->values.size() < target_slots)
-                    proj_nozzle_map->values.resize(target_slots, 0);
-                if (proj_volume_map && proj_volume_map->values.size() < target_slots)
-                    proj_volume_map->values.resize(target_slots, static_cast<int>(NozzleVolumeType::nvtStandard));
-                // The mixed-color project arrays are parallel per-slot like filament_colour;
-                // grow them in lockstep so a published mix slot has room for its definition.
-                // Defaults mirror set_num_filaments (false / empty string).
-                if (auto* opt = this->project_config.opt<ConfigOptionBools>("filament_is_mixed"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, false);
-                if (auto* opt = this->project_config.opt<ConfigOptionStrings>("filament_mixed_components"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, std::string{});
-                if (auto* opt = this->project_config.opt<ConfigOptionStrings>("filament_mixed_sublayer_ratios"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, std::string{});
-                if (auto* opt = this->project_config.opt<ConfigOptionBools>("filament_mixed_gradient"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, false);
-                if (auto* opt = this->project_config.opt<ConfigOptionStrings>("filament_mixed_gradient_range"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, std::string{});
-                if (auto* opt = this->project_config.opt<ConfigOptionStrings>("filament_mixed_gradient_curve"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, std::string{});
-                if (auto* opt = this->project_config.opt<ConfigOptionBools>("filament_mixed_gradient_per_part"))
-                    if (opt->values.size() < target_slots)
-                        opt->values.resize(target_slots, false);
-                if (this->ams_multi_color_filment.size() < target_slots)
-                    this->ams_multi_color_filment.resize(target_slots);
+                this->resize_filament_slot_arrays(std::max(target_slots, old_colour_count),
+                                                  old_colour_count == 0 ? std::string() : proj_colour->values.front());
                 for (size_t slot = old_colour_count; slot < target_slots; ++slot) {
                     std::string seed;
                     for (const PublishedMaterialEntry& entry : published_config->material_keys)
@@ -8401,21 +8419,29 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
     if (printers.get_edited_preset().printer_technology() != ptFFF)
         return;
 
-    // Orca: when there are fewer filament presets than the printer runs with (min_filament_count(): one per tool on a
-    // tool changer, one on a printer sharing its nozzles), append copies of the last one. Padding a shared-nozzle printer
-    // up to its nozzle count would bring back a filament the user deleted, in this list alone, without the colours and
-    // maps of the parallel per-filament arrays.
-    //
-    // Verify and select the filament presets.
+    // A tool changer feeds filament N from nozzle N, so it has one physical slot per nozzle, ahead
+    // of the mixed tail. A printer feeding its filaments through shared nozzles
+    // (single_extruder_multi_material) maps any number of them onto its nozzles, so one slot is
+    // enough and the user may delete down to it. When the printer runs with more slots than it
+    // has, the missing ones are added with their arrays, each copying the preset of the last one.
     size_t num_filaments = this->filament_presets.size();
 
-    const size_t min_filaments = min_filament_count();
-    if (min_filaments > num_filaments) { // Verify validity of the current filament presets.
-        for (size_t i = 0; i < this->filament_presets.size(); ++i)
-            this->filament_presets[i] = this->filaments.find_preset(this->filament_presets[i], true)->name;
-        // Append the rest of filament presets.
-        this->filament_presets.resize(min_filaments, this->filament_presets.empty() ? this->filaments.first_visible().name :
-                                                                                      this->filament_presets.back());
+    const bool   slot_per_nozzle = !printers.get_edited_preset().config.opt_bool("single_extruder_multi_material");
+    const size_t min_filaments   = min_filament_count();
+    const size_t slots_counted   = slot_per_nozzle ? num_physical_filaments() : num_filaments;
+    if (min_filaments > slots_counted) {
+        // Verify validity of the current filament presets.
+        for (std::string &name : this->filament_presets)
+            name = this->filaments.find_preset(name, true)->name;
+        if (this->filament_presets.empty()) {
+            // Not given its selections yet: the arrays still hold the option defaults, which
+            // load_selections sizes from this list afterwards, so grow them to it as they are.
+            this->filament_presets.resize(min_filaments, this->filaments.first_visible().name);
+            resize_filament_slot_arrays(min_filaments, std::string());
+        } else {
+            for (size_t slot = slots_counted; slot < min_filaments && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); ++slot)
+                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(slot));
+        }
         num_filaments = this->filament_presets.size();
     }
     if (to_delete_filament_id == -1)
