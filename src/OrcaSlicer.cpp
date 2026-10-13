@@ -3743,6 +3743,29 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // Every per-filament array is one value per loaded filament from here on: size the ones a project
+    // or a preset left short before anything indexes them, the way Print::apply does for the slice, and
+    // bring the flush matrix to the loaded counts the way the GUI does, keeping the pairs it had. The
+    // mixed-slot arrays are padded with their defaults first, so a mix in the first slot is not copied
+    // onto the padded ones; their loaded length is kept for the slot check further down.
+    std::vector<unsigned char> loaded_mixed_flags;
+    if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed")) {
+        loaded_mixed_flags = is_mixed_opt->values;
+        const auto *diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter");
+        const size_t padded   = std::max(loaded_mixed_flags.size(), diameters ? diameters->values.size() : size_t(0));
+        resize_mixed_filament_metadata(m_print_config, loaded_mixed_flags.size(), padded);
+    }
+    // A model given several filaments but no colours gets the default ones now rather than from the
+    // defaults merge below, so its matrix is computed for those filaments, as the GUI does for a new project.
+    if (const auto *diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter");
+        filament_count > 1 && diameters != nullptr && diameters->values.size() == static_cast<size_t>(filament_count))
+        m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+    m_print_config.enforce_cardinality();
+    // One filament needs no matrix, and a one-filament project keeps whatever it carries, as the GUI does.
+    const bool project_has_flush_matrix = m_print_config.has("flush_volumes_matrix");
+    if (const auto *diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter"); project_has_flush_matrix && diameters && diameters->values.size() > 1)
+        resize_flush_volumes_matrix(m_print_config, diameters->values.size(), size_t(new_extruder_count));
+
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
@@ -3754,25 +3777,8 @@ int CLI::run(int argc, char **argv)
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
 
-    // A project without colours keeps the matrix its presets shipped, sized for another filament count (the
-    // schema default is a 4x4 table), and G-code export rejects a matrix that is not filaments^2 x extruders.
-    // Size the colours to the loaded filaments so the rebuild below computes a matrix of the right size.
-    // One filament needs no matrix, and the rebuild reads the per-filament arrays, so it needs them sized.
-    const ConfigOptionFloats *flush_matrix_option     = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
-    const ConfigOptionFloats *filament_diameter_option = m_print_config.option<ConfigOptionFloats>("filament_diameter");
-    const bool flush_matrix_mismatched = filament_count > 1 && filament_diameter_option &&
-        filament_diameter_option->values.size() == static_cast<size_t>(filament_count) &&
-        (!flush_matrix_option || flush_matrix_option->values.size() != static_cast<size_t>(filament_count) * filament_count * new_extruder_count);
-    if (flush_matrix_mismatched && !selected_filament_colors_option) {
-        project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
-        std::vector<std::string> &project_filament_colors = project_filament_colors_option->values;
-        const std::string pad_color = project_filament_colors.empty() ? std::string("#FFFFFF") : project_filament_colors.front();
-        project_filament_colors.resize(filament_count, pad_color);
-        BOOST_LOG_TRIVIAL(info) << boost::format("flush_volumes_matrix has %1% entries for %2% filaments, rebuilding it") % (flush_matrix_option ? flush_matrix_option->values.size() : 0) % filament_count;
-    }
-
     if (project_filament_colors_option &&
-        (selected_filament_colors_option || flush_matrix_mismatched || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
+        (selected_filament_colors_option || !project_has_flush_matrix || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
     {
         std::vector<std::string>  selected_filament_colors;
         if (selected_filament_colors_option) {
@@ -4138,7 +4144,14 @@ int CLI::run(int argc, char **argv)
     // filament ids aimed at it fall outside the filament count, are reset to the first filament
     // and the model silently prints in a single colour.
     if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed")) {
-        const auto &is_mixed = is_mixed_opt->values;
+        // The sizing above cut the loaded flags to the filament count, so the loaded ones are checked too.
+        std::vector<unsigned char> is_mixed = is_mixed_opt->values;
+        for (size_t slot = 0; slot < loaded_mixed_flags.size(); ++slot)
+            if (loaded_mixed_flags[slot]) {
+                if (is_mixed.size() <= slot)
+                    is_mixed.resize(slot + 1, false);
+                is_mixed[slot] = true;
+            }
         for (size_t slot = static_cast<size_t>(std::max(filament_count, 0)); slot < is_mixed.size(); ++slot) {
             if (!is_mixed[slot])
                 continue;
@@ -4166,6 +4179,9 @@ int CLI::run(int argc, char **argv)
         //ORCA: an option no preset or project defines has just come in as its single default value, and a
         //      command line override may hold one value per filament.
         normalize_filament_values_to_variants(m_print_config);
+        // Those defaults and overrides are per-N arrays too: size them like the ones loaded earlier, so
+        // the exported project holds every array at its full length whichever way it was assembled.
+        m_print_config.enforce_cardinality();
     } else {
         boost::nowide::cerr << "invalid printer_technology " << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PRINTER_TECH, 0, cli_errors[CLI_INVALID_PRINTER_TECH], sliced_info);
