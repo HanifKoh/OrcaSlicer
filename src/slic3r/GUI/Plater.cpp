@@ -5941,8 +5941,11 @@ void Sidebar::add_custom_filament(wxColour new_col, const std::string& preset_na
     std::string new_color      = new_col.GetAsString(wxC2S_HTML_SYNTAX).ToStdString();
     const std::map<int, int> moved = bundle->insert_filament_slot(insert_pos, new_color);
     bundle->update_multi_material_filament_presets();
-    // The mixed slots behind the new one moved up: re-point the model's extruder ids and paint.
+    // The mixed slots behind the new one moved up: re-point the model's extruder ids and paint,
+    // then any slot the top-up added on its own.
     Slic3r::remap_model_filament_slots(wxGetApp().plater()->model(), moved);
+    wxGetApp().plater()->apply_pending_filament_slot_relocations();
+    filament_count = static_cast<int>(bundle->num_filament_slots());
 
     if (!preset_name.empty() &&
         wxGetApp().preset_bundle->filaments.find_preset(preset_name, false) &&

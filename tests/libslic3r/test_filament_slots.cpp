@@ -61,7 +61,8 @@ TEST_CASE("filament_slot_keys lists vector options only", "[Preset][Bundle][Fila
         CAPTURE(key);
         const ConfigOptionDef *def = print_config_def.get(key);
         REQUIRE(def != nullptr);
-        CHECK(def->default_value->is_vector());
+        // The slot resize visits strings, ints and bools only.
+        CHECK((def->type == coStrings || def->type == coInts || def->type == coBools));
     }
 }
 
@@ -213,7 +214,55 @@ TEST_CASE("A single-extruder multi-material printer tops up to a slot per nozzle
     printer.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values.assign(3, 0.4);
     bundle.update_multi_material_filament_presets();
     CHECK(bundle.num_filament_slots() == 3);
-    CHECK(bundle.is_mixed_filament(1));
-    CHECK_FALSE(bundle.is_mixed_filament(2));
+    // The slot it adds still goes ahead of the mixed tail.
+    CHECK_FALSE(bundle.is_mixed_filament(1));
+    CHECK(bundle.is_mixed_filament(2));
+    CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 1, 2 } });
     CHECK(bundle.filament_slots_consistent());
+}
+
+TEST_CASE("Deleting a slot the top-up puts back shifts the flush matrix", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    bundle.set_num_filaments(2u, "#FF0000");
+    set_nozzle_count(bundle, 2);
+    bundle.update_multi_material_filament_presets();
+    bundle.take_pending_slot_relocations();
+    bundle.project_config.option<ConfigOptionFloats>("flush_volumes_vector", true)->values = { 10, 10, 10, 10 };
+    bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix", true)->values = { 0, 11, 12, 0, 0, 21, 22, 0 };
+
+    bundle.update_num_filaments(0);
+    // The second filament is now first and a new slot follows it, so no pair of the deleted one survives.
+    REQUIRE(bundle.num_filament_slots() == 2);
+    CHECK(bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values == std::vector<double>{ 0, 20, 20, 0, 0, 20, 20, 0 });
+}
+
+TEST_CASE("insert_filament_slot sizes arrays that run behind the preset list first", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    bundle.set_num_filaments(3u, "#FF0000");
+    bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values = { "#111111" };
+
+    const std::map<int, int> moved = bundle.insert_filament_slot(1, "#00FF00");
+    CHECK(bundle.num_filament_slots() == 4);
+    CHECK(strings(bundle, "filament_colour").size() == 4);
+    CHECK(strings(bundle, "filament_colour")[1] == "#00FF00");
+    CHECK(moved == std::map<int, int>{ { 1, 2 }, { 2, 3 } });
+    CHECK(bundle.filament_slots_consistent());
+}
+
+TEST_CASE("A new slot starts on nozzle 1 with a standard-flow nozzle map", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    bundle.set_num_filaments(1u, "#FF0000");
+    bundle.project_config.option<ConfigOptionInts>("filament_map", true)->values        = { 2 };
+    bundle.project_config.option<ConfigOptionInts>("filament_nozzle_map", true)->values = { 7 };
+    bundle.project_config.option<ConfigOptionInts>("filament_volume_map", true)->values = { 1 };
+
+    bundle.set_num_filaments(2u);
+    const auto ints = [&bundle](const char *key) { return bundle.project_config.option<ConfigOptionInts>(key)->values; };
+    CHECK(ints("filament_map") == std::vector<int>{ 2, 1 });
+    CHECK(ints("filament_nozzle_map") == std::vector<int>{ 7, 0 });
+    CHECK(ints("filament_volume_map") == std::vector<int>{ 1, static_cast<int>(NozzleVolumeType::nvtStandard) });
+    CHECK(strings(bundle, "filament_colour_type") == std::vector<std::string>{ "1", "1" });
 }
