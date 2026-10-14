@@ -78,7 +78,8 @@ tests and debugging.
 Three operations change the slot count. Growth goes through one private resize,
 `resize_filament_slot_arrays`, that walks `filament_slot_keys()` and seeds every new
 entry; removal walks the same list and erases one entry from each array. The project
-loader pads the six mixed-colour arrays of an older project with
+loader pads the seven mixed-colour arrays of an older project (`filament_is_mixed` and
+the six `filament_mixed_*`) with
 `resize_mixed_filament_metadata` before the selections size the rest.
 
 - `set_num_filaments(n, colour)` grows or shrinks at the raw tail. It is the right
@@ -103,17 +104,20 @@ A tool changer feeds filament N from nozzle N, so a printer with more nozzles th
 the project has physical filaments needs the missing slots.
 `update_multi_material_filament_presets()` adds them: one `insert_filament_slot` per
 missing nozzle, placed ahead of the mixed tail, with a palette colour and a copy of
-the last physical preset. The top-up runs on every preset load, printer selection and
-extruder-count change, so a project opened with fewer filaments than the printer has
-nozzles gets its slots on every path, not only when the extruder count happened to
-change.
+the last physical preset. A single-extruder multi-material printer maps any number of
+filaments onto its shared nozzles, so one slot is enough for it: the top-up only fills an
+empty list, and the user may delete down to one. The top-up runs on every preset load and extruder-count change (a printer
+switch reaches it through the extruder-count handler when the count differs), so a
+project opened with fewer filaments than the printer has nozzles gets its slots on
+every path, not only when the extruder count happened to change.
 
 When a mixed tail exists, the insertion moves the mixed slots up, and the model's
 extruder ids and paint states must follow. The bundle has no model, so it records the
 moves (`take_pending_slot_relocations()`), and the owner of the model applies them:
 `Plater::load_files` for a freshly parsed project, right after the published-3MF
-relocations; `GUI_App::load_current_presets` and the printer tab's extruder-count
-handler for the live model. A surplus of physical slots when the nozzle count drops is
+relocations; for the live model `GUI_App::load_current_presets`, the user-preset loads
+and the removal of a preset bundle, the printer tab's extruder-count handler and page
+rebuild, and the sidebar's add and delete. A surplus of physical slots when the nozzle count drops is
 still removed one slot at a time through the sidebar's delete, which renumbers the
 model as it goes.
 
