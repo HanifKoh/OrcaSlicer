@@ -8029,7 +8029,10 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                                 if (!is_closing() && preset_bundle && mainframe) {
                                     // update_compatible() ensures proper selection state after deletion
                                     preset_bundle->update_compatible(PresetSelectCompatibleType::Never);
+                                    const size_t slots_before = preset_bundle->num_filament_slots();
                                     preset_bundle->update_multi_material_filament_presets();
+                                    if (plater())
+                                        plater()->sync_filament_slots_from_bundle(slots_before);
                                     mainframe->update_side_preset_ui();
 
                                     auto* evt = new wxCommandEvent(EVT_UPDATE_BUNDLE_COMPLETE);                                                                                                                                                       
