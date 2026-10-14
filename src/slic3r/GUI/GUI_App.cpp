@@ -1839,6 +1839,8 @@ void GUI_App::restart_networking()
             remove_user_presets();
             enable_user_preset_folder(true);
             preset_bundle->load_user_presets(m_agent->get_user_id(), ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             mainframe->update_side_preset_ui();
         }
 
@@ -5996,6 +5998,8 @@ void GUI_App::on_user_login_handle(wxCommandEvent &evt)
 
         dlg.Update(70, _L("Loading user presets…"));
         preset_bundle->load_user_presets(m_agent->get_user_id(provider), ForwardCompatibilitySubstitutionRule::Enable);
+        if (plater())
+            plater()->apply_pending_filament_slot_relocations();
         mainframe->update_side_preset_ui();
 
         dlg.Update(100);

@@ -772,6 +772,9 @@ PresetBundle& PresetBundle::operator=(const PresetBundle &rhs)
     physical_printers   = rhs.physical_printers;
 
     filament_presets    = rhs.filament_presets;
+    ams_multi_color_filment     = rhs.ams_multi_color_filment;
+    m_pending_slot_relocations  = rhs.m_pending_slot_relocations;
+    m_next_palette_colour       = rhs.m_next_palette_colour;
     project_config      = rhs.project_config;
     vendors             = rhs.vendors;
     obsolete_presets    = rhs.obsolete_presets;
@@ -3935,8 +3938,6 @@ void PresetBundle::update_selections(AppConfig &config)
         this->filament_presets.emplace_back(remove_ini_suffix(f_name));
     }
 
-    update_filament_count();
-
     std::vector<std::string> filament_colors;
     auto f_colors = config.get_printer_setting(initial_printer_profile_name, "filament_colors");
     if (!f_colors.empty()) {
@@ -4096,8 +4097,6 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
             break;
         this->filament_presets.emplace_back(remove_ini_suffix(f_name));
     }
-
-    update_filament_count();
 
     // Load data from AppConfig to ProjectConfig when Studio is initialized.
     std::vector<std::string> filament_colors;
@@ -4419,6 +4418,7 @@ void PresetBundle::resize_filament_slot_arrays(size_t n, const std::string &new_
 
 void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 {
+    assert(m_pending_slot_relocations.empty());
     const size_t old_filament_count = this->filament_presets.size();
     if (n > old_filament_count && old_filament_count != 0)
         filament_presets.resize(n, filament_presets.back());
@@ -4479,6 +4479,8 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
 {
     unsigned old_filament_count = this->filament_presets.size();
     assert(to_del_flament_id < old_filament_count);
+    // A recorded move is in the current numbering; the owner applies it before the slots change again.
+    assert(m_pending_slot_relocations.empty());
     filament_presets.erase(filament_presets.begin() + to_del_flament_id);
 
     // update edited_preset
@@ -4520,7 +4522,10 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
         with_slot_values(project_config.option(key, true), erase_or_resize);
     erase_or_resize(ams_multi_color_filment);
 
-    update_multi_material_filament_presets(to_del_flament_id);
+    // Shift the matrix while the count still reflects the deletion: a top-up that puts a slot
+    // back would otherwise leave the deleted filament's rows in place.
+    resize_flush_volumes_matrix(project_config, filament_presets.size(), get_printer_extruder_count(), to_del_flament_id);
+    update_multi_material_filament_presets();
 }
 
 bool PresetBundle::is_mixed_filament(size_t idx) const
@@ -5436,18 +5441,6 @@ int PresetBundle::get_printer_extruder_count() const
     int count = int(nozzle_diameter->values.size());
 
     return count;
-}
-
-void PresetBundle::update_filament_count()
-{
-    if (printers.get_edited_preset().printer_technology() != ptFFF)
-        return;
-    const size_t num_extruders = static_cast<size_t>(get_printer_extruder_count());
-    if (filament_presets.size() >= num_extruders)
-        return;
-    filament_presets.resize(num_extruders, filament_presets.empty()
-        ? filaments.first_visible().name
-        : filament_presets.back());
 }
 
 bool PresetBundle::support_different_extruders() const
@@ -8406,7 +8399,7 @@ void PresetBundle::on_extruders_count_changed(int extruders_count)
     extruder_ams_counts.resize(extruders_count);
 }
 
-void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filament_id)
+void PresetBundle::update_multi_material_filament_presets()
 {
     if (printers.get_edited_preset().printer_technology() != ptFFF)
         return;
@@ -8432,16 +8425,15 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
             this->filament_presets.resize(num_extruders, this->filaments.first_visible().name);
             resize_filament_slot_arrays(num_extruders, std::string());
         } else {
-            for (size_t slot = slots_for_nozzles; slot < num_extruders && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); ++slot)
-                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(slot));
+            // Each missing slot goes just ahead of the mixed tail, whichever count rule applies.
+            for (size_t missing = num_extruders - slots_for_nozzles; missing > 0 && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); --missing)
+                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(num_physical_filaments()));
         }
         num_filaments = this->filament_presets.size();
     }
-    if (to_delete_filament_id == -1)
-        to_delete_filament_id = num_filaments;
 
     // The flush matrix is used to deduce the number of extruders in the wipe tower generator.
-    resize_flush_volumes_matrix(this->project_config, num_filaments, get_printer_extruder_count(), to_delete_filament_id);
+    resize_flush_volumes_matrix(this->project_config, num_filaments, get_printer_extruder_count());
 }
 
 // Rewrite a preset-name-list field (compatible_printers / compatible_prints) so references to a
