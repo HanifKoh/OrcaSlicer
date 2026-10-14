@@ -6549,7 +6549,10 @@ void TabPrinter::update_pages()
             build_fff();
             if (m_extruders_count > 1)
             {
+                const size_t slots_before = m_preset_bundle->num_filament_slots();
                 m_preset_bundle->update_multi_material_filament_presets();
+                if (wxGetApp().plater())
+                    wxGetApp().plater()->sync_filament_slots_from_bundle(slots_before);
                 on_value_change("extruders_count", m_extruders_count);
             }
         }
