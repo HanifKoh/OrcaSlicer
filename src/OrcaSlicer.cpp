@@ -3754,8 +3754,25 @@ int CLI::run(int argc, char **argv)
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
 
+    // A project without colours keeps the matrix its presets shipped, sized for another filament count (the
+    // schema default is a 4x4 table), and G-code export rejects a matrix that is not filaments^2 x extruders.
+    // Size the colours to the loaded filaments so the rebuild below computes a matrix of the right size.
+    // One filament needs no matrix, and the rebuild reads the per-filament arrays, so it needs them sized.
+    const ConfigOptionFloats *flush_matrix_option     = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    const ConfigOptionFloats *filament_diameter_option = m_print_config.option<ConfigOptionFloats>("filament_diameter");
+    const bool flush_matrix_mismatched = filament_count > 1 && filament_diameter_option &&
+        filament_diameter_option->values.size() == static_cast<size_t>(filament_count) &&
+        (!flush_matrix_option || flush_matrix_option->values.size() != static_cast<size_t>(filament_count) * filament_count * new_extruder_count);
+    if (flush_matrix_mismatched && !selected_filament_colors_option) {
+        project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+        std::vector<std::string> &project_filament_colors = project_filament_colors_option->values;
+        const std::string pad_color = project_filament_colors.empty() ? std::string("#FFFFFF") : project_filament_colors.front();
+        project_filament_colors.resize(filament_count, pad_color);
+        BOOST_LOG_TRIVIAL(info) << boost::format("flush_volumes_matrix has %1% entries for %2% filaments, rebuilding it") % (flush_matrix_option ? flush_matrix_option->values.size() : 0) % filament_count;
+    }
+
     if (project_filament_colors_option &&
-        (selected_filament_colors_option || !m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix") || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
+        (selected_filament_colors_option || flush_matrix_mismatched || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
     {
         std::vector<std::string>  selected_filament_colors;
         if (selected_filament_colors_option) {
