@@ -1669,7 +1669,6 @@ bool PresetBundle::reload_local_bundle(const std::string& preset_folder, const s
         staged.filaments        = filaments;
         staged.printers         = printers;
         staged.filament_presets = filament_presets;
-        staged.project_config.apply_only(project_config, {"flush_volumes_matrix", "flush_volumes_vector", "flush_multiplier"});
         auto remove_target = [&](PresetCollection& collection) {
             auto begin = collection.m_presets.begin() + collection.m_num_default_presets;
             collection.m_presets.erase(std::remove_if(begin, collection.m_presets.end(), is_target), collection.m_presets.end());
@@ -1770,7 +1769,6 @@ bool PresetBundle::reload_local_bundle(const std::string& preset_folder, const s
         for (std::string& name : staged.filament_presets)
             if (boost::starts_with(name, target_prefix) && staged.filaments.find_preset(name, false) == nullptr)
                 name = staged.filaments.first_compatible().name;
-        staged.update_multi_material_filament_presets();
 
         struct Collection
         {
@@ -1798,11 +1796,6 @@ bool PresetBundle::reload_local_bundle(const std::string& preset_folder, const s
 
         if (calibrate_printer != nullptr && staged.printers.find_preset(calibrate_printer->name, false, true) != nullptr)
             staged.set_calibrate_printer(calibrate_printer->name);
-        std::array<std::pair<ConfigOptionFloats*, ConfigOptionFloats*>, 3> flush_options;
-        size_t i = 0;
-        for (const char* key : {"flush_volumes_matrix", "flush_volumes_vector", "flush_multiplier"})
-            flush_options[i++] = {project_config.option<ConfigOptionFloats>(key), staged.project_config.option<ConfigOptionFloats>(key)};
-
         metadata.bundle_type = BundleType::Local;
         metadata.is_subscribed = false;
         metadata.update_available = false;
@@ -1858,8 +1851,9 @@ bool PresetBundle::reload_local_bundle(const std::string& preset_folder, const s
         for (size_t i = 0; i < collections.size(); ++i)
             install_target(collections[i].live, collections[i].candidate);
         filament_presets.swap(staged.filament_presets);
-        for (const auto& options : flush_options)
-            options.first->values.swap(options.second->values);
+        // The reloaded printer may have more nozzles than the slots. The top-up runs on the live bundle
+        // so the slot arrays grow with the preset list and the moves reach the owner of the model.
+        update_multi_material_filament_presets();
         calibrate_printer = calibration_printer;
         calibrate_filaments.swap(calibration_filaments);
         dir_user_presets_local.swap(local_dir);
@@ -5997,6 +5991,8 @@ void PresetBundle::restore_selection(const Selection &selection)
     this->filament_presets    = selection.filament_presets;
     this->project_config      = selection.project_config;
     this->extruder_ams_counts = selection.extruder_ams_counts;
+    // The snapshot's slots replace any the top-up above added, so the moves it recorded are void.
+    m_pending_slot_relocations.clear();
 }
 
 
