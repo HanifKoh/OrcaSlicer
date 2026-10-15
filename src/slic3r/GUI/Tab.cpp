@@ -7483,6 +7483,9 @@ bool Tab::select_preset(
         // Orca: update presets for the selected printer
         if (m_type == Preset::TYPE_PRINTER && wxGetApp().app_config->get_bool("remember_printer_config")) {
             m_preset_bundle->update_selections(*wxGetApp().app_config);
+            // The remembered selection's top-up may have moved its mixed tail: the model follows now,
+            // not at whichever later slot change happens to drain the moves.
+            wxGetApp().plater()->apply_pending_filament_slot_relocations();
             wxGetApp().plater()->sidebar().on_filament_count_change(m_preset_bundle->filament_presets.size());
         }
         load_current_preset();
