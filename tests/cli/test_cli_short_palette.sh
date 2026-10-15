@@ -94,19 +94,35 @@ for e in errors:
     print("FAIL: " + e)
 sys.exit(1 if errors else 0)
 EOF2
-# A one-filament project given two filaments: the loaded count wins and the matrix follows it.
+# A one-filament project given two filaments: the loaded count wins, and the matrix, the variant tables
+# and the per-preset metadata columns follow it with the printer column still last.
 slice one "$WORK/cube.stl" \
     --load-settings "$PROFILES/machine/Bambu Lab P1S 0.4 nozzle.json;$PROFILES/process/0.20mm Standard @BBL X1C.json" \
     --load-filaments "$PROFILES/filament/Bambu PLA Basic @BBL P1S 0.4 nozzle.json"
 slice two "$WORK/one/out.3mf" \
     --load-filaments "$PROFILES/filament/Bambu PLA Basic @BBL P1S 0.4 nozzle.json;$PROFILES/filament/Bambu PLA Matte @BBL P1S 0.4 nozzle.json"
 
-"$PY" - "$WORK/two/out.3mf" <<'EOF2' || { tail -n 40 "$WORK/two/log"; exit 1; }
+"$PY" - "$WORK/two/out.3mf" "$WORK/one/out.3mf" <<'EOF2' || { tail -n 40 "$WORK/two/log"; exit 1; }
 import json, sys, zipfile
 
 with zipfile.ZipFile(sys.argv[1]) as z:
     config = json.loads(z.read("Metadata/project_settings.config"))
+with zipfile.ZipFile(sys.argv[2]) as z:
+    one = json.loads(z.read("Metadata/project_settings.config"))
 errors = []
+self_index = [int(v) for v in config.get("filament_self_index", [])]
+variants = config.get("filament_extruder_variant", [])
+if self_index != sorted(self_index) or sorted(set(self_index)) != [1, 2]:
+    errors.append("filament_self_index %s does not number the two filaments in order" % self_index)
+elif self_index.count(1) != self_index.count(2):
+    errors.append("filament_self_index %s gives the two filaments different variant counts" % self_index)
+if len(variants) != len(self_index):
+    errors.append("filament_extruder_variant has %d entries for %d self indices" % (len(variants), len(self_index)))
+for key in ("inherits_group", "different_settings_to_system"):
+    if len(config.get(key, [])) != 4:
+        errors.append("%s has %d columns for a print, two filaments and a printer" % (key, len(config.get(key, []))))
+if config.get("inherits_group", [""])[-1] != one.get("inherits_group", [""])[-1]:
+    errors.append("the printer column of inherits_group changed: %s -> %s" % (one.get("inherits_group"), config.get("inherits_group")))
 if len(config["filament_diameter"]) != 2:
     errors.append("filament_diameter has %d entries for two loaded filaments" % len(config["filament_diameter"]))
 # The CLI only carries the two colour side arrays when the project had them.
