@@ -6,6 +6,8 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include "catch2/catch_approx.hpp"
+#include "libslic3r/BoundingBox.hpp"
+#include "libslic3r/Point.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PrintConfigConstants.hpp"
 #include "libslic3r/LocalesUtils.hpp"
@@ -1664,4 +1666,28 @@ TEST_CASE("Default options of enum lists get their definition's keys map", "[Con
         ++enum_lists;
     }
     CHECK(enum_lists > 0);
+}
+
+TEST_CASE("Per-extruder printable areas that share no bed fall back to the whole bed", "[Config][BedShape]")
+{
+    const Pointfs bed = { { 0., 0. }, { 350., 0. }, { 350., 350. }, { 0., 350. } };
+    DynamicPrintConfig config;
+    config.set_key_value("printable_area", new ConfigOptionPoints(bed));
+
+    SECTION("overlapping areas give their intersection")
+    {
+        config.set_key_value("extruder_printable_area", new ConfigOptionPointsGroups{
+            { { 0., 0. }, { 200., 0. }, { 200., 350. }, { 0., 350. } },
+            { { 150., 0. }, { 350., 0. }, { 350., 350. }, { 150., 350. } } });
+        const BoundingBox shared(get_bed_shape(config, true));
+        CHECK(shared.min == Point(scaled(150.), 0));
+        CHECK(shared.max == Point(scaled(200.), scaled(350.)));
+    }
+    SECTION("areas that only touch share nothing, so the bed is used")
+    {
+        config.set_key_value("extruder_printable_area", new ConfigOptionPointsGroups{
+            { { 0., 0. }, { 175., 0. }, { 175., 350. }, { 0., 350. } },
+            { { 175., 0. }, { 350., 0. }, { 350., 350. }, { 175., 350. } } });
+        CHECK(get_bed_shape(config, true) == get_bed_shape(config, false));
+    }
 }
