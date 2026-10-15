@@ -755,7 +755,12 @@ TEST_CASE("Local reload reconciles filament slots and purge volumes while retain
     check_double_vector(f.bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values,
                         {0., 333., 333., 0., 0., 333., 333., 0.});
     CHECK(f.bundle.project_config.option("filament_colour") == colour);
-    CHECK(f.bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values == std::vector<std::string>{"#123456"});
+    // The slot arrays grow with the preset list: the kept slot keeps its colour, the new one gets its own.
+    const auto &colours = f.bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values;
+    REQUIRE(colours.size() == 2);
+    CHECK(colours[0] == "#123456");
+    CHECK(colours[1] != "#123456");
+    CHECK_FALSE(colours[1].empty());
 }
 
 TEST_CASE("Local reload rejects a non-FFF printer selection without changing live presets", "[Preset][Bundle][Regression]")
@@ -5343,63 +5348,6 @@ TEST_CASE("Adding a filament preserves slots with incomplete mixed metadata", "[
     }
 }
 
-// The nozzle-count top-up in update_multi_material_filament_presets() grows filament_presets on
-// its own, so a physical count derived from that list reports a slot no per-filament array has
-// yet. That is what made the extruder-count handler conclude there was nothing to add and leave
-// the new sidebar combo with no colour to draw.
-TEST_CASE("The physical filament count is not fooled by a lone filament_presets top-up", "[Preset][Bundle][FilamentMixer]")
-{
-    PresetBundle bundle;
-
-    SECTION("no mixed slots") {
-        bundle.set_num_filaments(4u, std::string("#FF0000"));
-        bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-            { 0.4, 0.4, 0.4, 0.4, 0.4 };
-        bundle.update_multi_material_filament_presets();
-
-        REQUIRE(bundle.filament_presets.size() == 5);   // the top-up moved this list on its own
-        REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 4);
-        CHECK(bundle.num_physical_filaments() == 4);
-    }
-
-    SECTION("behind a mixed tail") {
-        bundle.set_num_filaments(5u, std::string("#FF0000"));
-        bundle.project_config.option<ConfigOptionBools>("filament_is_mixed")->values =
-            { false, false, false, false, true };
-        bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-            { 0.4, 0.4, 0.4, 0.4, 0.4, 0.4 };
-        bundle.update_multi_material_filament_presets();
-
-        REQUIRE(bundle.filament_presets.size() == 6);
-        REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 5);
-        CHECK(bundle.num_physical_filaments() == 4);
-        CHECK(bundle.num_mixed_filaments() == 1);
-    }
-}
-
-// Which slots are new is a fact about the per-filament arrays, not about filament_presets, for the
-// same reason. Keyed off the wrong one, a freshly opened slot silently keeps filament 1's colour.
-TEST_CASE("New filament colours are placed by array position", "[Preset][Bundle][FilamentMixer]")
-{
-    PresetBundle bundle;
-    bundle.set_num_filaments(4u, std::string("#FF0000"));
-    bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter", true)->values =
-        { 0.4, 0.4, 0.4, 0.4, 0.4 };
-    bundle.update_multi_material_filament_presets();
-    REQUIRE(bundle.filament_presets.size() == 5);
-    REQUIRE(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values.size() == 4);
-
-    // The call Sidebar::add_custom_filament makes once the extruder count opens a slot.
-    bundle.set_num_filaments(5u, std::string("#00FF00"));
-
-    const auto &colours = bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values;
-    REQUIRE(colours.size() == 5);
-    CHECK(colours[4] == "#00FF00");   // not colours[0], which resize() would have padded with
-}
-
-// The mixed-slot flags are written into the app config on exit and read back on the next start.
-// If the read side loses them the slots survive as filaments but stop being mixes, so the project
-// comes back with the mix showing as an ordinary physical filament.
 TEST_CASE("A saved mix is still a mix after an app restart", "[Preset][Bundle][FilamentMixer]")
 {
     AppConfig app_config;
@@ -5488,6 +5436,60 @@ TEST_CASE("A saved mix survives a restart on a multi-tool printer", "[Preset][Bu
         CHECK(bundle.num_mixed_filaments() == 1);
         CHECK(bundle.is_mixed_filament(4));
     }
+}
+
+// Tab::select_preset re-reads the new printer's remembered selection (remember_printer_config is on
+// by default) and tops it up to the nozzle count. The new physical slots go ahead of the remembered
+// mixed tail, and the moves are recorded for the plater to apply to the model right away.
+TEST_CASE("A printer switch tops a remembered selection up ahead of its mixed tail and records the moves", "[Preset][Bundle][FilamentSlots]")
+{
+    auto make_toolchanger = [](PresetBundle &bundle) -> Preset & {
+        Preset &p = add_inmemory_preset(bundle.printers, "Tool Changer");
+        p.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = { 0.4, 0.4, 0.4, 0.4 };
+        p.config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
+        return p;
+    };
+
+    // The tool changer remembers two physical filaments and a mix of them.
+    AppConfig app_config;
+    {
+        PresetBundle bundle;
+        make_toolchanger(bundle);
+        bundle.printers.select_preset_by_name("Tool Changer", true);
+        add_inmemory_preset(bundle.filaments, "Test Filament");
+        bundle.filaments.select_preset_by_name("Test Filament", true);
+        bundle.set_num_filaments(3u, std::string("#FF0000"));
+        bundle.filament_presets.assign(3, "Test Filament");
+        bundle.project_config.option<ConfigOptionBools>("filament_is_mixed")->values            = { false, false, true };
+        bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values = { "", "", "1,2" };
+        bundle.export_selections(app_config);
+        REQUIRE(app_config.get_printer_setting("Tool Changer", "filament_is_mixed") == "0,0,1");
+    }
+
+    // This session starts on a one-nozzle printer and switches to the tool changer.
+    PresetBundle bundle;
+    add_inmemory_preset(bundle.printers, "Single Nozzle");
+    make_toolchanger(bundle);
+    add_inmemory_preset(bundle.filaments, "Test Filament");
+    bundle.printers.select_preset_by_name("Single Nozzle", true);
+    bundle.filaments.select_preset_by_name("Test Filament", true);
+    bundle.set_num_filaments(1u, std::string("#00FF00"));
+    bundle.filament_presets.assign(1, "Test Filament");
+    REQUIRE(bundle.take_pending_slot_relocations().empty());
+
+    bundle.printers.select_preset_by_name("Tool Changer", true);
+    bundle.update_selections(app_config);
+
+    CHECK(bundle.filament_presets.size() == 5);
+    CHECK(bundle.filament_slots_consistent());
+    CHECK(bundle.project_config.option<ConfigOptionBools>("filament_is_mixed")->values == std::vector<unsigned char>{ 0, 0, 0, 0, 1 });
+    CHECK(bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values[4] == "1,2");
+    // The two added slots sit between the remembered physical slots and the mix, with their own colours.
+    const auto &colours = bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values;
+    CHECK(colours[2] != colours[0]);
+    CHECK(colours[3] != colours[2]);
+    // The mix moved from slot 3 to slot 5; nothing else moved.
+    CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 2, 4 } });
 }
 
 // The startup sizing in GUI_App::load_current_presets targets the nozzle count plus the mixes.
@@ -6534,6 +6536,23 @@ TEST_CASE("Shrinking an edited vector survives local reload", "[Preset][Bundle][
     REQUIRE(f.bundle.reload_local_bundle("", f.id, &f.error));
     CHECK(f.bundle.printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter")->values.size() == 1);
     CHECK(f.bundle.printers.current_is_dirty());
+}
+
+TEST_CASE("Local reload tops the slots up with their arrays when the printer gains a nozzle", "[Preset][Bundle][FilamentSlots]")
+{
+    LocalReloadFixture f;
+    f.bundle.set_num_filaments(1);
+    REQUIRE(f.bundle.filament_slots_consistent());
+    DynamicPrintConfig config(f.bundle.printers.get_selected_preset().config);
+    config.option<ConfigOptionFloats>("nozzle_diameter")->values = {0.4, 0.4};
+    write_preset_with_inherits(config, f.directory / PRESET_PRINTER_NAME / "Printer.json", "Printer", "");
+    REQUIRE(f.bundle.reload_local_bundle("", f.id, &f.error));
+    CHECK(f.bundle.num_filament_slots() == 2);
+    CHECK(f.bundle.filament_slots_consistent());
+    // Two filaments squared, one block per nozzle.
+    CHECK(f.bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values.size() == 2 * 2 * 2);
+    // The new slot went on the tail behind no mixed slot, so nothing moved.
+    CHECK(f.bundle.take_pending_slot_relocations().empty());
 }
 
 TEST_CASE("Removing a selected printer preserves external dirty process edits", "[Preset][Bundle][Regression]")
@@ -8314,6 +8333,7 @@ TEST_CASE("Restoring a selection undoes an import that failed part-way", "[Prese
     CHECK_FALSE(bundle.printers.saved_is_dirty());
     CHECK(bundle.filament_presets == filaments_before);
     CHECK(bundle.project_config == project_before);
+    CHECK(bundle.take_pending_slot_relocations().empty());
     CHECK(project_preset_count(bundle) == 0);
 }
 

@@ -265,7 +265,12 @@ static void resize_option(ConfigOption *opt, size_t want, const std::string &key
     auto *vec = static_cast<ConfigOptionVectorBase *>(opt);
     if (vec->size() == want)
         return;
+    // Project-only keys (filament_colour_type, the mixed arrays) are not FullPrintConfig members; their
+    // schema default is the fallback.
     const ConfigOption *def = FullPrintConfig::defaults().option(key);
+    if (def == nullptr)
+        if (const ConfigOptionDef *schema = print_config_def.get(key); schema != nullptr)
+            def = schema->default_value.get();
     if (vec->empty()) {
         const bool default_empty = def == nullptr || !def->is_vector()
             || static_cast<const ConfigOptionVectorBase *>(def)->empty();
