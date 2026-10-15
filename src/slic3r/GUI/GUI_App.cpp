@@ -5470,6 +5470,8 @@ void GUI_App::request_user_logout(const std::string& provider/* = ORCA_CLOUD_PRO
             Slic3r::PluginManager::instance().clear_cloud_plugin_metadata();
             Slic3r::PluginManager::instance().set_cloud_user("");
             preset_bundle->load_user_presets(DEFAULT_USER_FOLDER_NAME, ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             mainframe->update_side_preset_ui();
 
             // keep this here. refresh_from_catalog is meant to update the dialog UI.
@@ -7096,6 +7098,8 @@ bool GUI_App::reload_settings()
             load_pending_vendors();
 
             preset_bundle->load_user_presets(*app_config, user_presets, ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             preset_bundle->save_user_presets(*app_config, get_delete_cache_presets());
 
             // Re-apply any edited config that was wiped during vendor loading or sync.
@@ -7293,6 +7297,7 @@ bool GUI_App::maybe_migrate_user_presets_on_login()
                         if (maybe_migrate_user_presets_on_login()) {
                             const std::string user_id = m_agent->get_user_id();
                             preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
+                            if (plater()) plater()->apply_pending_filament_slot_relocations();
                             if (mainframe) mainframe->update_side_preset_ui();
                         }
                     });
