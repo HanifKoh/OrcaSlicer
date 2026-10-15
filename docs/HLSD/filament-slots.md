@@ -116,8 +116,10 @@ extruder ids and paint states must follow. The bundle has no model, so it record
 moves (`take_pending_slot_relocations()`), and the owner of the model applies them:
 `Plater::load_files` for a freshly parsed project, right after the published-3MF
 relocations; for the live model `GUI_App::load_current_presets`, the user-preset loads
-and the removal of a preset bundle, the printer tab's extruder-count handler and page
-rebuild, and the sidebar's add and delete. A surplus of physical slots when the nozzle count drops is
+and the removal of a preset bundle, the plugin host's local bundle reload, the printer
+tab's extruder-count handler and page rebuild, and the sidebar's add and delete. A
+selection restore after a failed settings import puts the snapshot's slots back and
+drops the moves recorded in between. A surplus of physical slots when the nozzle count drops is
 still removed one slot at a time through the sidebar's delete, which renumbers the
 model as it goes.
 

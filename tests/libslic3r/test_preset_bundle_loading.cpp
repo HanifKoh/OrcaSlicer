@@ -6633,6 +6633,24 @@ TEST_CASE("Shrinking an edited vector survives local reload", "[Preset][Bundle][
     CHECK(f.bundle.printers.current_is_dirty());
 }
 
+TEST_CASE("Local reload tops the slots up with their arrays when the printer gains a nozzle", "[Preset][Bundle][FilamentSlots]")
+{
+    LocalReloadFixture f;
+    f.bundle.set_num_filaments(1);
+    REQUIRE(f.bundle.filament_slots_consistent());
+    DynamicPrintConfig config(f.bundle.printers.get_selected_preset().config);
+    // A tool changer: one slot per nozzle. A shared-nozzle printer would keep its one filament.
+    config.option<ConfigOptionFloats>("nozzle_diameter")->values = {0.4, 0.4};
+    config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
+    write_preset_with_inherits(config, f.directory / PRESET_PRINTER_NAME / "Printer.json", "Printer", "");
+    REQUIRE(f.bundle.reload_local_bundle("", f.id, &f.error));
+    CHECK(f.bundle.num_filament_slots() == 2);
+    CHECK(f.bundle.filament_slots_consistent());
+    CHECK(f.bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values.size() == 4);
+    // The new slot went on the tail behind no mixed slot, so nothing moved.
+    CHECK(f.bundle.take_pending_slot_relocations().empty());
+}
+
 TEST_CASE("Removing a selected printer preserves external dirty process edits", "[Preset][Bundle][Regression]")
 {
     LocalReloadFixture f;
@@ -8411,6 +8429,7 @@ TEST_CASE("Restoring a selection undoes an import that failed part-way", "[Prese
     CHECK_FALSE(bundle.printers.saved_is_dirty());
     CHECK(bundle.filament_presets == filaments_before);
     CHECK(bundle.project_config == project_before);
+    CHECK(bundle.take_pending_slot_relocations().empty());
     CHECK(project_preset_count(bundle) == 0);
 }
 
