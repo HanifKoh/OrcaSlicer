@@ -3342,8 +3342,22 @@ int CLI::run(int argc, char **argv)
         }
     }
     else {
-        new_nozzle_volume_type.resize(new_extruder_count, nvtStandard);
+        // Nothing on the command line: the project's own types when it has one per nozzle, else the
+        // printer's defaults, as the GUI seeds a project.
+        new_nozzle_volume_type.assign(new_extruder_count, nvtStandard);
+        const auto *project_types = m_print_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+        const auto *default_types = m_print_config.option<ConfigOptionEnumsGeneric>("default_nozzle_volume_type");
+        for (int e_index = 0; e_index < new_extruder_count; e_index++) {
+            if (project_types != nullptr && static_cast<int>(project_types->size()) == new_extruder_count)
+                new_nozzle_volume_type[e_index] = static_cast<NozzleVolumeType>(project_types->values[e_index]);
+            else if (default_types != nullptr && !default_types->values.empty())
+                new_nozzle_volume_type[e_index] = static_cast<NozzleVolumeType>(default_types->get_at(e_index));
+        }
     }
+    new_nozzle_volume_type.resize(new_extruder_count, nvtStandard);
+    // The project carries one volume type per nozzle, as the GUI writes it, so an export reopens with the
+    // types it was sliced with.
+    m_print_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)->values.assign(new_nozzle_volume_type.begin(), new_nozzle_volume_type.end());
     new_extruder_variants.resize(new_extruder_count, "");
     const ConfigOptionEnumsGeneric *opt_extruder_type = dynamic_cast<const ConfigOptionEnumsGeneric *>(m_print_config.option("extruder_type"));
     for (int e_index = 0; e_index < new_extruder_count; e_index++) {
