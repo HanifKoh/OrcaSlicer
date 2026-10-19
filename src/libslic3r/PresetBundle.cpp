@@ -3937,6 +3937,8 @@ void PresetBundle::update_selections(AppConfig &config)
     if (!f_colors.empty()) {
         boost::algorithm::split(filament_colors, f_colors, boost::algorithm::is_any_of(","));
     }
+    // A saved list can hold colours for more slots than it names presets for; the top-up below adds those slots.
+    const std::vector<std::string> saved_filament_colors = filament_colors;
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
@@ -3994,7 +3996,7 @@ void PresetBundle::update_selections(AppConfig &config)
     // as the application may have been closed with an active "external" preset, which does not
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
-    this->update_multi_material_filament_presets();
+    this->update_multi_material_filament_presets(saved_filament_colors);
 
     std::string first_visible_filament_name;
     for (auto & fp : filament_presets) {
@@ -4098,6 +4100,8 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     if (!f_colors.empty()) {
         boost::algorithm::split(filament_colors, f_colors, boost::algorithm::is_any_of(","));
     }
+    // A saved list can hold colours for more slots than it names presets for; the top-up below adds those slots.
+    const std::vector<std::string> saved_filament_colors = filament_colors;
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
@@ -4153,7 +4157,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     // as the application may have been closed with an active "external" preset, which does not
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
-    this->update_multi_material_filament_presets();
+    this->update_multi_material_filament_presets(saved_filament_colors);
 
     if (initial_printer != nullptr && (preferred_printer == nullptr || initial_printer == preferred_printer)) {
         // Don't run the following code, as we want to activate default filament / SLA material profiles when installing and selecting a new printer.
@@ -8395,7 +8399,7 @@ void PresetBundle::on_extruders_count_changed(int extruders_count)
     extruder_ams_counts.resize(extruders_count);
 }
 
-void PresetBundle::update_multi_material_filament_presets()
+void PresetBundle::update_multi_material_filament_presets(const std::vector<std::string> &saved_colours)
 {
     if (printers.get_edited_preset().printer_technology() != ptFFF)
         return;
@@ -8421,9 +8425,13 @@ void PresetBundle::update_multi_material_filament_presets()
             this->filament_presets.resize(num_extruders, this->filaments.first_visible().name);
             resize_filament_slot_arrays(num_extruders, std::string());
         } else {
-            // Each missing slot goes just ahead of the mixed tail, whichever count rule applies.
-            for (size_t missing = num_extruders - slots_for_nozzles; missing > 0 && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); --missing)
-                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(num_physical_filaments()));
+            // Each missing slot goes just ahead of the mixed tail, whichever count rule applies. A slot added at
+            // the end takes the colour saved for it, if any.
+            for (size_t missing = num_extruders - slots_for_nozzles; missing > 0 && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); --missing) {
+                const size_t pos    = num_physical_filaments();
+                const bool   at_end = pos == num_filament_slots() && pos < saved_colours.size();
+                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(pos, at_end ? saved_colours[pos] : std::string()));
+            }
         }
         num_filaments = this->filament_presets.size();
     }

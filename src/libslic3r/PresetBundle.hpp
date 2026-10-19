@@ -581,11 +581,6 @@ public:
     int get_printer_extruder_count() const;
     bool support_different_extruders() const;
 
-    // Orca: Ensure filament_presets has at least one slot per nozzle on FFF printers.
-    // Called from (load|update)_selections before the parallel project_config arrays
-    // (filament_colour/colour_type/map) are sized off filament_presets.size(), so a
-    // short saved filament list doesn't truncate the loaded colors.
-
     // Load user configuration and store it into the user profiles.
     // This method is called by the configuration wizard.
     void                        load_config_from_wizard(const std::string &name, DynamicPrintConfig config, Semver file_version)
@@ -656,7 +651,8 @@ public:
 
     // Read out the number of extruders from an active printer preset,
     // update size and content of filament_presets.
-    void                        update_multi_material_filament_presets();
+    // saved_colours: the colours a saved selection lists by slot, for the slots the top-up adds at the end.
+    void                        update_multi_material_filament_presets(const std::vector<std::string> &saved_colours = {});
     // Mixed-color filament slots: virtual slots realized from 2-3 physical filaments.
     bool                        is_mixed_filament(size_t idx) const;
     std::vector<size_t>         physical_filament_config_indices() const;

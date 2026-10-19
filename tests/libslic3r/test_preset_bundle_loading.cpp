@@ -5492,6 +5492,51 @@ TEST_CASE("A printer switch tops a remembered selection up ahead of its mixed ta
     CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 2, 4 } });
 }
 
+// A saved selection can name fewer presets than the printer has nozzles while listing a colour for every
+// nozzle (a printer never fully configured, a hand-trimmed config). The slots the top-up adds keep the
+// saved colours rather than palette ones.
+TEST_CASE("The top-up keeps the colours a short saved selection lists for the slots it adds", "[Preset][Bundle][FilamentSlots]")
+{
+    AppConfig app_config;
+    {
+        PresetBundle bundle;
+        Preset &printer = add_inmemory_preset(bundle.printers, "Tool Changer");
+        printer.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = { 0.4, 0.4, 0.4, 0.4 };
+        printer.config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
+        bundle.printers.select_preset_by_name("Tool Changer", true);
+        add_inmemory_preset(bundle.filaments, "Test Filament");
+        bundle.filaments.select_preset_by_name("Test Filament", true);
+        bundle.set_num_filaments(1u, std::string("#111111"));
+        bundle.filament_presets.assign(1, "Test Filament");
+        bundle.export_selections(app_config);
+    }
+    app_config.set_printer_setting("Tool Changer", "filament_01", "Test Filament");
+    app_config.set_printer_setting("Tool Changer", "filament_02", "Test Filament");
+    app_config.set_printer_setting("Tool Changer", "filament_03", "");
+    app_config.set_printer_setting("Tool Changer", "filament_colors", "#111111,#222222,#333333,#444444");
+
+    PresetBundle bundle;
+    Preset &printer = add_inmemory_preset(bundle.printers, "Tool Changer");
+    printer.config.option<ConfigOptionFloats>("nozzle_diameter", true)->values = { 0.4, 0.4, 0.4, 0.4 };
+    printer.config.option<ConfigOptionBool>("single_extruder_multi_material", true)->value = false;
+    add_inmemory_preset(bundle.filaments, "Test Filament");
+    const std::vector<std::string> saved = { "#111111", "#222222", "#333333", "#444444" };
+
+    SECTION("at startup") {
+        bundle.load_selections(app_config);
+        REQUIRE(bundle.filament_presets.size() == 4);
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values == saved);
+    }
+    SECTION("on a printer switch") {
+        bundle.printers.select_preset_by_name("Tool Changer", true);
+        bundle.update_selections(app_config);
+        REQUIRE(bundle.filament_presets.size() == 4);
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values == saved);
+    }
+}
+
 // The startup sizing in GUI_App::load_current_presets targets the nozzle count plus the mixes.
 // That is a floor, never a ceiling: set_num_filaments() trims at the raw tail, which is exactly
 // where the mixes live, so applying the target to a longer list deletes them. A list longer than
