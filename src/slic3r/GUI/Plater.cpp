@@ -6330,6 +6330,8 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
     auto enable_append  = wxGetApp().app_config->get_bool("enable_append_color_by_sync_ams");
     auto sync_color_only = wxGetApp().app_config->get("sync_ams_filament_mode") == "1";
     auto n              = wxGetApp().preset_bundle->sync_ams_list(unknowns, !sync_result.direct_sync, sync_result.sync_maps, enable_append, merge_info, sync_color_only);
+    // The sync ends in the nozzle-count top-up, which can move the mixed slots up.
+    wxGetApp().plater()->apply_pending_filament_slot_relocations();
     wxString detail;
     for (auto & uk : unknowns) {
         auto tray_name     = uk.first->opt_string("tray_name", 0u);

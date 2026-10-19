@@ -7491,6 +7491,8 @@ void GUI_App::update_single_bundle(wxCommandEvent& evt)
             preset_bundle->update_subscribed_presets(*app_config, bundle_presets, remote_metadata, ForwardCompatibilitySubstitutionRule::Enable);
 
             preset_bundle->bundles.WriteUnlock();
+            // The reload ends in the nozzle-count top-up, which can move the mixed slots up.
+            if (plater()) plater()->apply_pending_filament_slot_relocations();
             
             std::string text = format(_L("%s updated from %s to %s"), remote_metadata.name, initial_version, remote_metadata.version);
             wxGetApp().plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,NotificationManager::NotificationLevel::RegularNotificationLevel,text);
@@ -7611,6 +7613,8 @@ int GUI_App::sync_bundle(std::string bundle_id, std::string version)
                     preset_bundle->update_subscribed_presets(*app_config, bundle_presets, remote_metadata, ForwardCompatibilitySubstitutionRule::Enable);
 
                     preset_bundle->bundles.WriteUnlock();
+                    // The reload ends in the nozzle-count top-up, which can move the mixed slots up.
+                    if (plater()) plater()->apply_pending_filament_slot_relocations();
 
                     if(is_new)
                     {
