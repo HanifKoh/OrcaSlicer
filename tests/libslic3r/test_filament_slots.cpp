@@ -10,6 +10,7 @@
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/PrintConfigCardinality.hpp"
 
 using namespace Slic3r;
 
@@ -55,7 +56,7 @@ TEST_CASE("Every slot array follows the preset list through growth, shrink and d
     CHECK(bundle.filament_slots_consistent());
 }
 
-TEST_CASE("filament_slot_keys lists vector options only", "[Preset][Bundle][FilamentSlots]")
+TEST_CASE("filament_slot_keys lists one-per-filament vector options only", "[Preset][Bundle][FilamentSlots]")
 {
     for (const std::string &key : PresetBundle::filament_slot_keys()) {
         CAPTURE(key);
@@ -63,6 +64,8 @@ TEST_CASE("filament_slot_keys lists vector options only", "[Preset][Bundle][Fila
         REQUIRE(def != nullptr);
         // The slot resize visits strings, ints and bools only.
         CHECK((def->type == coStrings || def->type == coInts || def->type == coBools));
+        // The cardinality classification sizes the same keys at apply, so the two lists cannot drift.
+        CHECK(cardinality_of(key) == ConfigCardinality::PerFilament);
     }
 }
 
