@@ -103,8 +103,9 @@ preset list ahead of the arrays, and its default colours must survive.
 A tool changer feeds filament N from nozzle N, so a printer with more nozzles than
 the project has physical filaments needs the missing slots.
 `update_multi_material_filament_presets()` adds them: one `insert_filament_slot` per
-missing nozzle, placed ahead of the mixed tail, with a palette colour and a copy of
-the last physical preset. A single-extruder multi-material printer maps any number of
+missing nozzle, placed ahead of the mixed tail, with a copy of the last physical preset
+and a palette colour. A saved selection can list colours for more slots than it names
+presets for; a slot the top-up adds at the end takes the colour saved for it. A single-extruder multi-material printer maps any number of
 filaments onto its shared nozzles, so one slot is enough for it: the top-up only fills an
 empty list, and the user may delete down to one. The top-up runs on every preset load and extruder-count change (a printer
 switch reaches it through the extruder-count handler when the count differs), so a
