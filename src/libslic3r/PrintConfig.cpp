@@ -13585,7 +13585,7 @@ static Points to_points(const std::vector<Vec2d> &dpts)
     return pts;
 }
 
-Polygon get_shared_poly(const std::vector<Pointfs>& extruder_polys)
+Polygon get_shared_poly(const std::vector<Pointfs>& extruder_polys, const Pointfs& bed)
 {
     Polygon result;
     for (size_t index = 0; index < extruder_polys.size(); index++)
@@ -13597,12 +13597,16 @@ Polygon get_shared_poly(const std::vector<Pointfs>& extruder_polys)
             Polygon extruder_poly;
             extruder_poly.points = to_points(extruder_area);
             Polygons shared = intersection(extruder_poly, result);
-            // Extruder areas that do not overlap share no bed: an empty polygon, for the caller to fall back on.
-            if (shared.empty())
-                return Polygon();
+            // Extruder areas that do not overlap share no bed: use the whole bed instead.
+            if (shared.empty()) {
+                result.points.clear();
+                break;
+            }
             result = shared.front();
         }
     }
+    if (result.points.empty())
+        result.points = to_points(make_counter_clockwise(bed));
     return result;
 }
 Points get_bed_shape(const DynamicPrintConfig &config, bool use_share)
@@ -13618,34 +13622,19 @@ Points get_bed_shape(const DynamicPrintConfig &config, bool use_share)
         return {};
     }
 
-    Polygon bed_poly;
     if (use_share) {
         const ConfigOptionPointsGroups *extruder_area_opt = config.opt<ConfigOptionPointsGroups>("extruder_printable_area");
-        if (extruder_area_opt && (extruder_area_opt->size() > 0))
-            bed_poly = get_shared_poly(extruder_area_opt->values);
-        // No extruder areas, or none they all share: the whole bed.
-        if (bed_poly.points.empty())
-            bed_poly.points = to_points(make_counter_clockwise(bed_shape_opt->values));
+        if (extruder_area_opt)
+            return get_shared_poly(extruder_area_opt->values, bed_shape_opt->values).points;
     }
-    else
-        bed_poly.points = to_points(make_counter_clockwise(bed_shape_opt->values));
-
-    return bed_poly.points;
+    return to_points(make_counter_clockwise(bed_shape_opt->values));
 }
 
 Points get_bed_shape(const PrintConfig &cfg, bool use_share)
 {
-    Polygon bed_poly;
-    if (use_share) {
-        if (!cfg.extruder_printable_area.values.empty())
-            bed_poly = get_shared_poly(cfg.extruder_printable_area.values);
-        if (bed_poly.points.empty())
-            bed_poly.points = to_points(make_counter_clockwise(cfg.printable_area.values));
-    }
-    else
-        bed_poly.points = to_points(make_counter_clockwise(cfg.printable_area.values));
-
-    return bed_poly.points;
+    if (use_share)
+        return get_shared_poly(cfg.extruder_printable_area.values, cfg.printable_area.values).points;
+    return to_points(make_counter_clockwise(cfg.printable_area.values));
 }
 
 Points get_bed_shape(const SLAPrinterConfig &cfg) { return to_points(make_counter_clockwise(cfg.printable_area.values)); }

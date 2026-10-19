@@ -4468,7 +4468,7 @@ BoundingBoxf3 PartPlate::get_build_volume(bool use_share)
 	Vec3d up_point;
 	Vec3d low_point;
 	if (use_share && !m_extruder_areas.empty()) {
-		Polygon bed_poly = get_shared_poly(m_extruder_areas);
+		Polygon bed_poly = get_shared_poly(m_extruder_areas, m_shape);
 		BoundingBox bbox = bed_poly.bounding_box();
 
 		up_point = Vec3d(unscale_(bbox.max.x()) + eps,  unscale_(bbox.max.y()) + eps, m_origin.z() + m_height + eps);
@@ -4485,7 +4485,7 @@ BoundingBoxf3 PartPlate::get_build_volume(bool use_share)
 
 Polygon PartPlate::get_shared_printable_polygon() const
 {
-	return m_extruder_areas.empty() ? Polygon::new_scale(m_shape) : get_shared_poly(m_extruder_areas);
+	return m_extruder_areas.empty() ? Polygon::new_scale(m_shape) : get_shared_poly(m_extruder_areas, m_shape);
 }
 
 

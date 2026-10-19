@@ -1689,5 +1689,9 @@ TEST_CASE("Per-extruder printable areas that share no bed fall back to the whole
             { { 0., 0. }, { 175., 0. }, { 175., 350. }, { 0., 350. } },
             { { 175., 0. }, { 350., 0. }, { 350., 350. }, { 175., 350. } } });
         CHECK(get_bed_shape(config, true) == get_bed_shape(config, false));
+        // The plate's build volume and shared polygon read get_shared_poly directly.
+        const BoundingBox shared(get_shared_poly(config.option<ConfigOptionPointsGroups>("extruder_printable_area")->values, bed).points);
+        CHECK(shared.min == Point(0, 0));
+        CHECK(shared.max == Point(scaled(350.), scaled(350.)));
     }
 }
