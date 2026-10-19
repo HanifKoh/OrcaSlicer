@@ -70,6 +70,8 @@ holds exactly one value per slot:
   `filament_mixed_gradient_curve`, `filament_mixed_gradient_per_part`
 
 plus the AMS colour list `ams_multi_color_filment`, which is not a config option.
+Every config key in the list is `PerFilament` in the cardinality classification, and a
+test holds the two lists to that.
 Physical filaments come first; mixed-colour slots, which are virtual and have no
 nozzle of their own, sit at the tail. `num_physical_filaments()` is the slot count
 minus the mixed flags, and `filament_slots_consistent()` states the invariant for
