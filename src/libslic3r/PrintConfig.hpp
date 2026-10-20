@@ -2516,7 +2516,8 @@ private:
 bool is_XL_printer(const DynamicPrintConfig &cfg);
 bool is_XL_printer(const PrintConfig &cfg);
 
-Polygon get_shared_poly(const std::vector<Pointfs>& extruder_polys);
+// The area every extruder can reach; the whole bed when there are no extruder areas or they share none.
+Polygon get_shared_poly(const std::vector<Pointfs>& extruder_polys, const Pointfs& bed);
 Points get_bed_shape(const DynamicPrintConfig &cfg, bool use_share = true);
 Points get_bed_shape(const PrintConfig &cfg, bool use_share = false);
 Points get_bed_shape(const SLAPrinterConfig &cfg);
