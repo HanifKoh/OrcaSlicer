@@ -63,10 +63,14 @@ void reload_local_bundle(const std::string& bundle_id)
         if (app.mainframe == nullptr)
             throw std::runtime_error("OrcaSlicer main window is not available");
 
+        const size_t slots_before = app.preset_bundle->num_filament_slots();
         reloaded = app.preset_bundle->reload_local_bundle(app.app_config->get("preset_folder"), bundle_id, &error);
         if (!reloaded)
             return;
 
+        // The reload tops the slots up when the reloaded printer has more nozzles than the project.
+        if (GUI::Plater* plater = app.plater())
+            plater->sync_filament_slots_from_bundle(slots_before);
         app.mainframe->update_side_preset_ui();
         for (GUI::Tab* tab : app.tabs_list) {
             tab->reload_config();

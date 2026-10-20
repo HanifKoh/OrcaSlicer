@@ -172,6 +172,7 @@ TEST_CASE("ConfigCardinality classifies every vector option, and none is left un
     const std::set<std::string> landmines_ext = { "extruder_offset", "extruder_colour" };
     const std::set<std::string> landmines_fil = { "filament_map", "filament_colour",
                                                   "filament_colour_type", "filament_multi_colour",
+                                                  "filament_nozzle_map", "filament_volume_map",
                                                   "filament_is_mixed", "filament_mixed_components",
                                                   "filament_mixed_sublayer_ratios", "filament_mixed_gradient",
                                                   "filament_mixed_gradient_range", "filament_mixed_gradient_curve",

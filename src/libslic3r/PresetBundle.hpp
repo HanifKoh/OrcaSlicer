@@ -445,11 +445,28 @@ public:
         PresetBundle &m_bundle;
     };
 
-    // n is the total slot count, and growth appends at the raw tail - which is where the mixed
-    // slots live. A caller adding physical filaments has to add num_mixed_filaments() on top and
-    // then move the new slots ahead of the mixed tail, as Sidebar::add_custom_filament does.
+    // Filament slots. The project has num_filament_slots() slots: filament_presets names each
+    // slot's preset and every array in filament_slot_keys() holds one value per slot, with the
+    // mixed-colour slots at the tail. Only the functions below change the slot count, so the preset
+    // list and the arrays cannot drift apart.
+    static const std::vector<std::string> &filament_slot_keys();
+    size_t          num_filament_slots() const { return filament_presets.size(); }
+    // n is the total slot count. Growth appends at the raw tail, where the mixed slots live, so a
+    // caller adding a physical filament uses insert_filament_slot instead. New slots take new_col,
+    // or the next palette colour when it is empty.
     void            set_num_filaments(unsigned int n, std::string new_col = "");
-    void         update_num_filaments(unsigned int to_del_flament_id);
+    void            update_num_filaments(unsigned int to_del_flament_id);
+    // Insert one physical slot at pos with the given or the next palette colour, copying the preset
+    // of the slot before it. Returns old -> new index (0-based) of every slot that moved up, for the
+    // caller to apply to its model with remap_model_filament_slots.
+    std::map<int, int> insert_filament_slot(size_t pos, const std::string &colour = std::string());
+    // Slots the nozzle-count top-up moved on its own (physical slots inserted ahead of the mixed
+    // tail). The owner of the model takes and applies them; the record is empty afterwards.
+    std::map<int, int> take_pending_slot_relocations();
+    // Next colour of the fixed palette: one sequence for every slot added without a colour.
+    std::string     next_filament_colour();
+    // True when every slot array holds exactly num_filament_slots() values.
+    bool            filament_slots_consistent() const;
 
     void get_ams_cobox_infos(AMSComboInfo &combox_info);
     unsigned int sync_ams_list(std::vector<std::pair<DynamicPrintConfig *,std::string>> &unknowns, bool use_map, std::map<int, AMSMapInfo> &maps, bool enable_append, MergeFilamentInfo &merge_info, bool color_only = false);
@@ -564,12 +581,6 @@ public:
     int get_printer_extruder_count() const;
     bool support_different_extruders() const;
 
-    // Orca: Ensure filament_presets has at least one slot per nozzle on FFF printers.
-    // Called from (load|update)_selections before the parallel project_config arrays
-    // (filament_colour/colour_type/map) are sized off filament_presets.size(), so a
-    // short saved filament list doesn't truncate the loaded colors.
-    void update_filament_count();
-
     // Load user configuration and store it into the user profiles.
     // This method is called by the configuration wizard.
     void                        load_config_from_wizard(const std::string &name, DynamicPrintConfig config, Semver file_version)
@@ -640,7 +651,8 @@ public:
 
     // Read out the number of extruders from an active printer preset,
     // update size and content of filament_presets.
-    void                        update_multi_material_filament_presets(size_t to_delete_filament_id = size_t(-1));
+    // saved_colours: the colours a saved selection lists by slot, for the slots the top-up adds at the end.
+    void                        update_multi_material_filament_presets(const std::vector<std::string> &saved_colours = {});
     // Mixed-color filament slots: virtual slots realized from 2-3 physical filaments.
     bool                        is_mixed_filament(size_t idx) const;
     std::vector<size_t>         physical_filament_config_indices() const;
@@ -731,6 +743,12 @@ public:
         const std::atomic<bool>* cancel = nullptr, std::vector<std::string>* failed = nullptr);
 
 private:
+    // Size every slot array to n. Entries beyond the colour array's old length count as new and
+    // are seeded: colours with new_colour or the palette, maps and flags with their slot defaults.
+    void                resize_filament_slot_arrays(size_t n, const std::string &new_colour);
+    std::map<int, int>  m_pending_slot_relocations;
+    size_t              m_next_palette_colour = 0;
+
     // Move the presets and vendor profiles of `others` into this bundle, in one pass
     // over each collection. A preset whose name this bundle or an earlier one of
     // `others` already has is left out and listed under the bundle that repeats it.
