@@ -2562,10 +2562,10 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
         auto        *bundle       = wxGetApp().preset_bundle;
         Sidebar     &sidebar      = wxGetApp().plater()->sidebar();
         // A tool changer feeds filament N from nozzle N, so the extruder count sizes the physical
-        // run only; mixed slots are virtual and keep the tail. Go one slot at a time through the
-        // sidebar's own +/- calls: they insert ahead of the mixed tail and renumber filament ids,
+        // run only; mixed slots are virtual and keep the tail. The bundle has already added the
+        // missing physical slots (PresetBundle::update_multi_material_filament_presets); surplus
+        // ones go one at a time through the sidebar's own delete, which renumbers filament ids,
         // painted facets, custom g-code and mixed components, which a bulk resize clamps away.
-        // Both also refresh the print tab and export the selections, so nothing to do afterwards.
         size_t physical = bundle->num_physical_filaments();
         while (physical != num_extruder) {
             if (physical < num_extruder)
@@ -5869,7 +5869,9 @@ void TabPrinter::extruders_count_changed(size_t extruders_count)
     bool is_count_changed = false;
     if (m_extruders_count != extruders_count) {
         m_extruders_count = extruders_count;
+        const size_t slots_before = m_preset_bundle->num_filament_slots();
         m_preset_bundle->on_extruders_count_changed(extruders_count);
+        wxGetApp().plater()->sync_filament_slots_from_bundle(slots_before);
         is_count_changed = true;
 
         wxGetApp().plater()->get_partplate_list().on_extruder_count_changed((int)m_extruders_count);
@@ -6547,7 +6549,10 @@ void TabPrinter::update_pages()
             build_fff();
             if (m_extruders_count > 1)
             {
+                const size_t slots_before = m_preset_bundle->num_filament_slots();
                 m_preset_bundle->update_multi_material_filament_presets();
+                if (wxGetApp().plater())
+                    wxGetApp().plater()->sync_filament_slots_from_bundle(slots_before);
                 on_value_change("extruders_count", m_extruders_count);
             }
         }
@@ -7746,6 +7751,9 @@ bool Tab::select_preset(
         // Orca: update presets for the selected printer
         if (m_type == Preset::TYPE_PRINTER && wxGetApp().app_config->get_bool("remember_printer_config")) {
             m_preset_bundle->update_selections(*wxGetApp().app_config);
+            // The remembered selection's top-up may have moved its mixed tail: the model follows now,
+            // not at whichever later slot change happens to drain the moves.
+            wxGetApp().plater()->apply_pending_filament_slot_relocations();
             wxGetApp().plater()->sidebar().on_filament_count_change(m_preset_bundle->filament_presets.size());
         }
         load_current_preset();

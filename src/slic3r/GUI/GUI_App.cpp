@@ -1900,6 +1900,8 @@ void GUI_App::restart_networking()
             remove_user_presets();
             enable_user_preset_folder(true);
             preset_bundle->load_user_presets(m_agent->get_user_id(), ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             mainframe->update_side_preset_ui();
         }
 
@@ -5468,6 +5470,8 @@ void GUI_App::request_user_logout(const std::string& provider/* = ORCA_CLOUD_PRO
             Slic3r::PluginManager::instance().clear_cloud_plugin_metadata();
             Slic3r::PluginManager::instance().set_cloud_user("");
             preset_bundle->load_user_presets(DEFAULT_USER_FOLDER_NAME, ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             mainframe->update_side_preset_ui();
 
             // keep this here. refresh_from_catalog is meant to update the dialog UI.
@@ -6187,6 +6191,8 @@ void GUI_App::on_user_login_handle(wxCommandEvent &evt)
 
         dlg.Update(70, _L("Loading user presets…"));
         preset_bundle->load_user_presets(m_agent->get_user_id(provider), ForwardCompatibilitySubstitutionRule::Enable);
+        if (plater())
+            plater()->apply_pending_filament_slot_relocations();
         mainframe->update_side_preset_ui();
 
         dlg.Update(100);
@@ -7092,6 +7098,8 @@ bool GUI_App::reload_settings()
             load_pending_vendors();
 
             preset_bundle->load_user_presets(*app_config, user_presets, ForwardCompatibilitySubstitutionRule::Enable);
+            if (plater())
+                plater()->apply_pending_filament_slot_relocations();
             preset_bundle->save_user_presets(*app_config, get_delete_cache_presets());
 
             // Re-apply any edited config that was wiped during vendor loading or sync.
@@ -7289,6 +7297,7 @@ bool GUI_App::maybe_migrate_user_presets_on_login()
                         if (maybe_migrate_user_presets_on_login()) {
                             const std::string user_id = m_agent->get_user_id();
                             preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
+                            if (plater()) plater()->apply_pending_filament_slot_relocations();
                             if (mainframe) mainframe->update_side_preset_ui();
                         }
                     });
@@ -7693,6 +7702,8 @@ void GUI_App::update_single_bundle(wxCommandEvent& evt)
             preset_bundle->update_subscribed_presets(*app_config, bundle_presets, remote_metadata, ForwardCompatibilitySubstitutionRule::Enable);
 
             preset_bundle->bundles.WriteUnlock();
+            // The reload ends in the nozzle-count top-up, which can move the mixed slots up.
+            if (plater()) plater()->apply_pending_filament_slot_relocations();
             
             std::string text = format(_L("%s updated from %s to %s"), remote_metadata.name, initial_version, remote_metadata.version);
             wxGetApp().plater()->get_notification_manager()->push_notification(NotificationType::CustomNotification,NotificationManager::NotificationLevel::RegularNotificationLevel,text);
@@ -7813,6 +7824,8 @@ int GUI_App::sync_bundle(std::string bundle_id, std::string version)
                     preset_bundle->update_subscribed_presets(*app_config, bundle_presets, remote_metadata, ForwardCompatibilitySubstitutionRule::Enable);
 
                     preset_bundle->bundles.WriteUnlock();
+                    // The reload ends in the nozzle-count top-up, which can move the mixed slots up.
+                    if (plater()) plater()->apply_pending_filament_slot_relocations();
 
                     if(is_new)
                     {
@@ -8252,7 +8265,10 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                                 if (!is_closing() && preset_bundle && mainframe) {
                                     // update_compatible() ensures proper selection state after deletion
                                     preset_bundle->update_compatible(PresetSelectCompatibleType::Never);
+                                    const size_t slots_before = preset_bundle->num_filament_slots();
                                     preset_bundle->update_multi_material_filament_presets();
+                                    if (plater())
+                                        plater()->sync_filament_slots_from_bundle(slots_before);
                                     mainframe->update_side_preset_ui();
 
                                     auto* evt = new wxCommandEvent(EVT_UPDATE_BUNDLE_COMPLETE);                                                                                                                                                       
@@ -9439,23 +9455,11 @@ void GUI_App::load_current_presets(bool active_preset_combox/*= false*/, bool ch
 
     auto& edited_printer_preset = preset_bundle->printers.get_edited_preset();
     PrinterTechnology printer_technology = edited_printer_preset.printer_technology();
-    // ORCA: Sync filament count with the printer's nozzle count before loading presets for multi-tool printers.
-    // This ensures filament_presets vector is properly sized when combo boxes are created/updated.
-    if (printer_technology == ptFFF && !edited_printer_preset.config.opt_bool("single_extruder_multi_material")) {
-        auto* nozzle_diameter = edited_printer_preset.config.option<ConfigOptionFloats>("nozzle_diameter");
-        if (nozzle_diameter) {
-            // Mixed-color slots are virtual filaments kept at the tail of the list, so they have no
-            // nozzle of their own and the count has to allow for them. Only ever grow: this sizes
-            // the list so the combo boxes have something to bind to, and set_num_filaments() trims
-            // at the raw tail, so shrinking here would eat the mixes rather than the surplus
-            // physical slots. A list longer than the nozzle count is a state the app reaches
-            // legitimately - raising the extruder count and not saving the printer preset leaves
-            // exactly that on the next start - and losing the project's mixes to it is worse than
-            // carrying a filament the printer has no nozzle for until the count is next changed.
-            const size_t target = nozzle_diameter->values.size() + preset_bundle->num_mixed_filaments();
-            if (target > preset_bundle->filament_presets.size())
-                preset_bundle->set_num_filaments(target);
-        }
+    // One physical filament slot per nozzle: the bundle adds the missing slots itself, and a slot
+    // it moved ahead of the project's mixed tail is re-pointed in the model here.
+    if (printer_technology == ptFFF) {
+        preset_bundle->update_multi_material_filament_presets();
+        this->plater()->apply_pending_filament_slot_relocations();
     }
 	this->plater()->set_printer_technology(printer_technology);
     for (Tab *tab : tabs_list)
