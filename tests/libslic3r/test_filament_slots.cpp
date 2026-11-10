@@ -748,6 +748,29 @@ TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots b
     CHECK(bundle.filament_slot_repairs() == 0);
 }
 
+// A slot array a value short: the value is a physical slot's, as the normaliser takes it, so the mix keeps
+// its own value whether the physical count then grows or shrinks.
+TEST_CASE("The physical count call puts a missing value ahead of the mixed tail before the count changes", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    set_slots(bundle, 2, { "1,2" });
+    const int  standard   = static_cast<int>(NozzleVolumeType::nvtStandard);
+    const int  high_flow  = static_cast<int>(NozzleVolumeType::nvtHighFlow);
+    const auto volume_map = [&bundle]() { return bundle.project_config.option<ConfigOptionInts>("filament_volume_map")->values; };
+    bundle.project_config.option<ConfigOptionInts>("filament_volume_map")->values = { standard, high_flow };
+
+    SECTION("growing") {
+        bundle.set_num_physical_filaments(3);
+        CHECK(volume_map() == std::vector<int>{ standard, standard, standard, high_flow });
+    }
+    SECTION("shrinking") {
+        bundle.set_num_physical_filaments(1);
+        CHECK(volume_map() == std::vector<int>{ standard, high_flow });
+    }
+    CHECK(bundle.filament_slot_repairs() == 1);
+    CHECK(bundle.filament_slots_consistent());
+}
+
 TEST_CASE("An imported object naming a mixed slot gets a physical filament of its own", "[Preset][Bundle][FilamentSlots]")
 {
     // A geometry-only import names its source's filaments, which are physical. The project grows its

@@ -4651,6 +4651,9 @@ void PresetBundle::insert_physical_filament_slots(size_t n, const std::vector<st
 
 void PresetBundle::set_num_physical_filaments(size_t n)
 {
+    // The insertion and the removal below count the mixed flags and work on each array by position, so
+    // they need the arrays in step, as the top-up does.
+    normalize_filament_slots();
     n                     = std::max<size_t>(n, 1);
     const size_t physical = num_physical_filaments();
     if (n > physical) {

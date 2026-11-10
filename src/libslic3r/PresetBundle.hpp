@@ -472,7 +472,8 @@ public:
     // each slot ahead of the mixed tail with a copy of the last physical preset and a palette colour;
     // a shrink removes the last physical slots, as update_num_filaments removes one. The mixed slots
     // move with the physical count, and every move is recorded for take_pending_slot_relocations().
-    // Ends with the nozzle-count top-up, which can put back slots a tool changer needs.
+    // Normalises the slot arrays first, as the top-up does, and ends with the top-up, which can put
+    // back slots a tool changer needs.
     void            set_num_physical_filaments(size_t n);
     // Slots the bundle moved on its own (physical slots inserted ahead of the mixed tail or removed
     // from its front), as old -> new index, -1 for a removed slot. The owner of the model takes and
@@ -494,7 +495,8 @@ public:
     // Bring every slot array back to one value per slot when a writer left them out of step, logging
     // each new mismatch once. A missing value is a physical slot's: in every array it goes ahead of the
     // mixed tail, seeded as a new slot's. An extra one is dropped and logged. The bundle's entry points
-    // that rewrite the slot arrays call it before they return, and the nozzle-count top-up before it inserts.
+    // that rewrite the slot arrays call it before they return, and the nozzle-count top-up and
+    // set_num_physical_filaments before they insert or remove slots.
     void            normalize_filament_slots();
     // How many times normalize_filament_slots() found the slots out of step, and what it found last.
     size_t          filament_slot_repairs() const { return m_filament_slot_repairs; }

@@ -28,7 +28,7 @@ each has its own rule.
 | Layer | Count owner | Sizing path | When it runs |
 |---|---|---|---|
 | Config (libslic3r) | `axis_counts()` reads extruders from `nozzle_diameter`, filaments from `filament_diameter`, variants from the variant lists | `DynamicPrintConfig::enforce_cardinality()` | `Preset::normalize` at load (plain per-filament options), `Print::apply` for the slice, the CLI after its filament merge |
-| Bundle (`PresetBundle`) | `num_filament_slots()` is the length of `filament_presets` | `set_num_filaments`, `insert_filament_slot`, `update_num_filaments`, the nozzle-count top-up | Whenever a slot is added, inserted or removed, and whenever the printer's nozzle count exceeds the physical slots |
+| Bundle (`PresetBundle`) | `num_filament_slots()` is the length of `filament_presets` | `set_num_filaments`, `insert_filament_slot`, `set_num_physical_filaments`, `update_num_filaments`, the nozzle-count top-up | Whenever a slot is added, inserted or removed, and whenever the printer's nozzle count exceeds the physical slots |
 
 The bundle produces `filament_diameter` with one entry per slot when it assembles the
 full config, so the config layer's filament count is the bundle's slot count by
@@ -128,9 +128,12 @@ colour pickers, which index the bundle's arrays by slot before any slice sizes t
 back in step and logs the ones it repaired. The bundle's entry points that rewrite the
 slot arrays call it before they return: `load_selections`,
 `update_selections`, the project load (`load_config_file_config`), `sync_ams_list`,
-`reload_local_bundle` and `restore_selection`. The nozzle-count top-up calls it before it
-inserts, because the insertion keeps each array's values up to the colours' length and
-counts the mixed flags. On a consistent bundle it costs one length comparison per array.
+`reload_local_bundle` and `restore_selection`. The nozzle-count top-up and
+`set_num_physical_filaments` call it before they insert or remove slots, because the
+insertion keeps each array's values up to the colours' length, the removal erases one value
+by position, and both count the mixed flags. `set_num_filaments`, `update_num_filaments`
+and `set_num_physical_filaments` end in the top-up, so its call also checks what they
+leave. On a consistent bundle it costs one length comparison per array.
 A bundle without selections has no slots and is left alone.
 
 The repair keeps every value an array has. An array does not say which slot a missing
@@ -256,11 +259,11 @@ extra filaments therefore print with the tool numbers of the slots ahead of the 
   mixed tail, a delete, the physical count call and a refused shrink leave it nothing to
   repair, and a sync with a mix behind a High Flow slot keeps every slot's values on
   that slot; the physical count grows and shrinks with the mixed tail last and the model
-  following; an imported object naming a mixed slot gets a filament of its own; a shrink
-  across the mixed tail is refused; a plate's maps take an inserted slot at its
-  position; moving or removing a slot re-points every reference the model makes to it;
-  the CLI's reorder moves every per-filament value and renumbers the references and a
-  plate's print sequences.
+  following, and puts a value missing from an array ahead of the tail first; an imported
+  object naming a mixed slot gets a filament of its own; a shrink across the mixed tail
+  is refused; a plate's maps take an inserted slot at its position; moving or removing a
+  slot re-points every reference the model makes to it; the CLI's reorder moves every
+  per-filament value and renumbers the references and a plate's print sequences.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
