@@ -9523,14 +9523,15 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         }
                         int size = extruderIds.size() == 0 ? 0 : *(extruderIds.rbegin());
 
-                        int filament_size = sidebar->combos_filament().size();
-                        while (filament_size < MAXIMUM_EXTRUDER_NUMBER && filament_size < size) {
-                            int         filament_count = filament_size + 1;
-                            wxColour    new_col        = Plater::get_next_color_for_filament();
-                            std::string new_color      = new_col.GetAsString(wxC2S_HTML_SYNTAX).ToStdString();
-                            wxGetApp().preset_bundle->set_num_filaments(filament_count, new_color);
-                            wxGetApp().plater()->on_filament_count_change(filament_count);
-                            ++filament_size;
+                        // The imported objects name the filaments of their source, which are physical: a geometry-only
+                        // import brings no mixed definitions. The project grows its physical filaments to the highest
+                        // id ahead of its mixed tail, so an id that named one of its mixed slots names a filament now,
+                        // and the objects already on the plate follow the mixes they use.
+                        auto *bundle = wxGetApp().preset_bundle;
+                        if (size > 0 && static_cast<size_t>(size) > bundle->num_physical_filaments()) {
+                            const size_t slots_before = bundle->num_filament_slots();
+                            bundle->set_num_physical_filaments(static_cast<size_t>(size));
+                            q->sync_filament_slots_from_bundle(slots_before);
                         }
                         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
                     }

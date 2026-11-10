@@ -733,6 +733,54 @@ TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots b
     CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 1, -1 }, { 2, -1 }, { 3, 2 } });
 }
 
+TEST_CASE("An imported object naming a mixed slot gets a physical filament of its own", "[Preset][Bundle][FilamentSlots]")
+{
+    // A geometry-only import names its source's filaments, which are physical. The project grows its
+    // physical filaments to the highest id the import names, ahead of the mixed tail; the objects
+    // already in the project follow their mixes, and the imported ones keep their ids.
+    PresetBundle bundle;
+    Model        project;
+    const auto import_up_to = [&bundle, &project](size_t highest_id) {
+        if (highest_id > bundle.num_physical_filaments())
+            bundle.set_num_physical_filaments(highest_id);
+        remap_model_filament_slots(project, bundle.take_pending_slot_relocations());
+    };
+
+    SECTION("one mixed slot") {
+        set_slots(bundle, 2, { "1,2" });
+        const ModelObject *on_mix = add_object_on(project, 3, 3);
+        import_up_to(3);
+        REQUIRE(bundle.num_filament_slots() == 4);
+        CHECK_FALSE(bundle.is_mixed_filament(2));
+        CHECK(on_mix->volumes.front()->config.extruder() == 4);
+        CHECK(bundle.is_mixed_filament(3));
+        CHECK(strings(bundle, "filament_mixed_components")[3] == "1,2");
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(mixed_tail_last(bundle));
+    }
+    SECTION("two mixed slots") {
+        set_slots(bundle, 2, { "1,2", "2,1" });
+        const ModelObject *on_first  = add_object_on(project, 3, 3);
+        const ModelObject *on_second = add_object_on(project, 4, 4);
+        import_up_to(3);
+        REQUIRE(bundle.num_filament_slots() == 5);
+        CHECK_FALSE(bundle.is_mixed_filament(2));
+        CHECK(on_first->volumes.front()->config.extruder() == 4);
+        CHECK(on_second->volumes.front()->config.extruder() == 5);
+        CHECK(painted_with(on_second, 5));
+        CHECK(strings(bundle, "filament_mixed_components") == std::vector<std::string>{ "", "", "", "1,2", "2,1" });
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(mixed_tail_last(bundle));
+    }
+    SECTION("ids within the physical filaments add nothing") {
+        set_slots(bundle, 2, { "1,2" });
+        const ModelObject *on_mix = add_object_on(project, 3, 3);
+        import_up_to(2);
+        CHECK(bundle.num_filament_slots() == 3);
+        CHECK(on_mix->volumes.front()->config.extruder() == 3);
+    }
+}
+
 TEST_CASE("set_num_filaments refuses to cut across the mixed tail", "[Preset][Bundle][FilamentSlots]")
 {
     PresetBundle bundle;
