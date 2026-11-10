@@ -169,3 +169,14 @@ project.
   carrying one colour and a three-filament matrix slices on the CLI and exports one
   colour per filament with the matrix pairs it had; a one-filament project given two
   filaments slices with two.
+
+## Keeping the sizing paths the only ones
+
+`scripts/check_per_n_resizes.py` reads the lines a change adds under `src/` and flags the
+ones that resize a per-N array outside the owners above: calls to `set_num_filaments`,
+`set_num_extruders` and `resize_flush_volumes_matrix`, `resize`/`push_back`/`erase` and
+assignment on `filament_presets` or on the values of a slot or per-N option (by key, or
+through a variable bound to one), a `ConfigOptionVectorBase` resize, and a length check on
+a slot array that precedes a hand-rolled top-up. The owners are listed with their reasons in
+`scripts/per_n_resize_allowlist.txt`; a deliberate exception is a reviewed entry there.
+The pull-request job reports hits as warnings only, since the match is textual.

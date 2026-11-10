@@ -66,6 +66,7 @@ Before opening a pull request or posting on GitHub, read [CONTRIBUTING.md](CONTR
 
 - Changes must not cause regressions in existing functionality, defaults, profiles, or project compatibility.
 - Features gated by options must not affect existing behavior when those options are disabled.
+- Per-filament, per-extruder and per-variant config arrays are sized only by the cardinality layer (`PrintConfigCardinality`) or `PresetBundle`'s slot functions, never by an ad-hoc `resize` or `set_num_*` call; see [docs/HLSD/filament-slots.md](docs/HLSD/filament-slots.md). `scripts/check_per_n_resizes.py` flags such lines, and a deliberate exception goes in `scripts/per_n_resize_allowlist.txt`.
 - Changes should follow the existing code style and architecture. Architectural changes should be justified in code comments and the PR description.
 - Add helper functions or utilities only when existing code cannot reasonably be reused. Avoid duplication.
 - Keep code concise and clear. Manually simplify AI generated bloated codes before review.
