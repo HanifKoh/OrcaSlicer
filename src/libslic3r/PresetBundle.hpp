@@ -459,7 +459,9 @@ public:
     size_t          num_filament_slots() const { return filament_presets.size(); }
     // n is the total slot count. Growth appends at the raw tail, where the mixed slots live, so a
     // caller adding a physical filament uses insert_filament_slot or set_num_physical_filaments
-    // instead. New slots take new_col, or the next palette colour when it is empty.
+    // instead. New slots take new_col, or the next palette colour when it is empty. A shrink is
+    // refused while there are mixed slots, as cutting at the tail would drop the mixes: physical
+    // filaments are removed with set_num_physical_filaments or update_num_filaments.
     void            set_num_filaments(unsigned int n, std::string new_col = "");
     void            update_num_filaments(unsigned int to_del_flament_id);
     // Insert one physical slot at pos with the given or the next palette colour, copying the preset

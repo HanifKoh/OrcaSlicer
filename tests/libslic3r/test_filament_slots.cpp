@@ -732,3 +732,20 @@ TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots b
     // The removed filaments are gone, the mix moved down to behind the slot the top-up put back.
     CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 1, -1 }, { 2, -1 }, { 3, 2 } });
 }
+
+TEST_CASE("set_num_filaments refuses to cut across the mixed tail", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    set_slots(bundle, 3, { "1,2" });
+
+    bundle.set_num_filaments(2u);
+    CHECK(bundle.num_filament_slots() == 4);
+    CHECK(bundle.is_mixed_filament(3));
+    CHECK(bundle.filament_slots_consistent());
+
+    SECTION("but still appends a slot for a new mix") {
+        bundle.set_num_filaments(5u);
+        CHECK(bundle.num_filament_slots() == 5);
+        CHECK(bundle.filament_slots_consistent());
+    }
+}

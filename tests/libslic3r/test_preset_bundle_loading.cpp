@@ -2847,11 +2847,12 @@ TEST_CASE("Sizing the filament list to a multi-tool nozzle count keeps mixed slo
         CHECK(bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values[4] == "2,3");
     }
 
-    SECTION("the nozzle count alone is what truncated it away") {
+    SECTION("the nozzle count alone is refused rather than truncating it away") {
         bundle.set_num_filaments(nozzle_count, std::string("#00FF00"));
 
-        CHECK(bundle.filament_presets.size() == nozzle_count);
-        CHECK(bundle.num_mixed_filaments() == 0);
+        CHECK(bundle.filament_presets.size() == 5);
+        CHECK(bundle.num_mixed_filaments() == 1);
+        CHECK(bundle.is_mixed_filament(4));
     }
 }
 
@@ -6365,10 +6366,11 @@ TEST_CASE("A restored selection holds one colour pack per filament", "[Preset][B
 
 // The startup sizing in GUI_App::load_current_presets targets the nozzle count plus the mixes.
 // That is a floor, never a ceiling: set_num_filaments() trims at the raw tail, which is exactly
-// where the mixes live, so applying the target to a longer list deletes them. A list longer than
-// the target is reachable - raising the extruder count without saving the printer preset leaves
-// the extra physical slot behind on the next start - so the startup sizing must only ever grow.
-TEST_CASE("Sizing down to the nozzle count plus mixes is what eats the mixed tail", "[Preset][Bundle][FilamentMixer]")
+// where the mixes live, so it refuses to shrink a list that has mixes rather than delete them. A
+// list longer than the target is reachable - raising the extruder count without saving the printer
+// preset leaves the extra physical slot behind on the next start - so the startup sizing must only
+// ever grow.
+TEST_CASE("Sizing down to the nozzle count plus mixes leaves the mixed tail", "[Preset][Bundle][FilamentMixer]")
 {
     // 5 physical + 1 mix, on a printer preset still reporting 4 nozzles.
     const size_t nozzle_count = 4;
@@ -6383,12 +6385,12 @@ TEST_CASE("Sizing down to the nozzle count plus mixes is what eats the mixed tai
     const size_t target = nozzle_count + bundle.num_mixed_filaments();
     REQUIRE(target < bundle.filament_presets.size());
 
-    SECTION("applied as written, the mix is gone and every slot reads physical") {
+    SECTION("applied as written, the shrink is refused and the mix stays") {
         bundle.set_num_filaments(target);
 
-        CHECK(bundle.filament_presets.size() == target);
-        CHECK(bundle.num_mixed_filaments() == 0);
-        CHECK(bundle.num_physical_filaments() == target);
+        CHECK(bundle.filament_presets.size() == 6);
+        CHECK(bundle.num_mixed_filaments() == 1);
+        CHECK(bundle.num_physical_filaments() == 5);
     }
 
     SECTION("applied as a floor, the mix is left alone") {

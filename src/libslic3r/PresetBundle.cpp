@@ -4523,6 +4523,11 @@ void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 {
     assert(m_pending_slot_relocations.empty());
     const size_t old_filament_count = this->filament_presets.size();
+    if (n < old_filament_count && num_mixed_filaments() > 0) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": refused to cut " << old_filament_count << " slots to " << n
+                                   << " across the mixed tail";
+        return;
+    }
     if (n > old_filament_count && old_filament_count != 0)
         filament_presets.resize(n, filament_presets.back());
     else
