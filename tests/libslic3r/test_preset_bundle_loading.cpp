@@ -8100,6 +8100,41 @@ TEST_CASE("A multi-toolhead project saved without filament self indices loads ev
     CHECK(bundle.project_config.opt<ConfigOptionStrings>("filament_colour")->values == colors);
 }
 
+// A project file carries its per-slot arrays at the lengths it wrote them with. Loading it sizes every
+// slot array to the project's filaments, keeping the values the file has for them, without a top-up
+// adding a slot; the AMS colour lists of the project before do not outnumber the new slots.
+TEST_CASE("A loaded project holds one value per filament in every slot array", "[Preset][Bundle][FilamentSlots]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.opt<ConfigOptionStrings>("filament_colour")->values       = { "#FF0000", "#00FF00", "#0000FF" };
+    config.opt<ConfigOptionFloats>("filament_diameter")->values      = { 1.75, 1.75, 1.75 };
+    config.option<ConfigOptionStrings>("filament_colour_type", true)->values  = { "2" };
+    config.option<ConfigOptionStrings>("filament_multi_colour", true)->values = { "#FF0000 #FFFFFF", "#00FF00", "#0000FF", "#123456", "#654321" };
+    config.option<ConfigOptionInts>("filament_map", true)->values             = { 2, 2 };
+    config.option<ConfigOptionInts>("filament_volume_map", true)->values      = { 1 };
+    config.option<ConfigOptionInts>("filament_nozzle_map", true)->values      = { 3, 3, 3, 3 };
+    Preset::normalize(config);
+
+    PresetBundle bundle;
+    // The project open before ran five filaments from the AMS.
+    bundle.set_num_filaments(5u, std::string("#111111"));
+    bundle.ams_multi_color_filment.assign(5, { "#111111" });
+    bundle.load_config_model("test.3mf", std::move(config));
+
+    REQUIRE(bundle.num_filament_slots() == 3);
+    CHECK(bundle.take_pending_slot_relocations().empty());
+    CHECK(bundle.filament_slots_consistent());
+    const auto strings  = [&bundle](const char *key) { return bundle.project_config.opt<ConfigOptionStrings>(key)->values; };
+    const auto ints     = [&bundle](const char *key) { return bundle.project_config.opt<ConfigOptionInts>(key)->values; };
+    const int  standard = static_cast<int>(NozzleVolumeType::nvtStandard);
+    CHECK(strings("filament_colour") == std::vector<std::string>{ "#FF0000", "#00FF00", "#0000FF" });
+    CHECK(strings("filament_colour_type") == std::vector<std::string>{ "2", "1", "1" });
+    CHECK(strings("filament_multi_colour") == std::vector<std::string>{ "#FF0000 #FFFFFF", "#00FF00", "#0000FF" });
+    CHECK(ints("filament_map") == std::vector<int>{ 2, 2, 1 });
+    CHECK(ints("filament_volume_map") == std::vector<int>{ 1, standard, standard });
+    CHECK(ints("filament_nozzle_map") == std::vector<int>{ 3, 3, 3 });
+}
+
 TEST_CASE("A project with fewer filaments than tools fills every filament slot", "[Preset][Bundle][Regression]")
 {
     const size_t tool_count = 4;

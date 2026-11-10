@@ -6511,9 +6511,13 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
         // Load the project config values. In published mode only the plate/bed geometry keys
         // cross over (the receiver must not inherit the author's filament/purge data).
         this->project_config.apply_only(config, is_published ? s_project_options_published : s_project_options);
-        // Older projects inherit one-element mixed defaults, regardless of their filament count.
-        if (!is_published)
+        if (!is_published) {
+            // Older projects inherit one-element mixed defaults, regardless of their filament count.
             resize_mixed_filament_metadata(this->project_config, num_filaments, num_filaments);
+            // The file writes each of the other slot arrays at its own length, and the AMS colour lists
+            // are the previous project's: one value per filament of this project in each.
+            resize_filament_slot_arrays(num_filaments, std::string());
+        }
 
         break;
     }
