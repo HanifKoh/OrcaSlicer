@@ -100,6 +100,14 @@ class FlaggedLines(unittest.TestCase):
         self.assertEqual(len(run(CPP, '    cfg.option<ConfigOptionStrings>("filament_colour")->deserialize(text);')), 1)
         self.assertEqual(len(run(CPP, '    cfg.set_key_value("nozzle_diameter", opt->clone());')), 1)
 
+    def test_replacement_with_an_existing_option(self):
+        for line in ('    new_cfg.set_key_value("filament_colour", color_head);',
+                     '    config.set_key_value("nozzle_diameter", opt_nozzle);',
+                     '    cfg.set_key_value("filament_colour", cfg.option<ConfigOptionStrings>("filament_colour")->clone());',
+                     '    cfg.set_key_value("filament_map", new ConfigOptionEnumsGeneric{1});',
+                     '    *cfg.option<ConfigOptionFloats>("nozzle_diameter") = *other.option<ConfigOptionFloats>("nozzle_diameter");'):
+            self.assertEqual(len(run(CPP, line)), 1, line)
+
     def test_filament_presets_edit(self):
         self.assertEqual(len(run(CPP, "    bundle.filament_presets.push_back(name);")), 1)
 
@@ -133,7 +141,10 @@ class IgnoredLines(unittest.TestCase):
     def test_scalars_and_app_config_are_not_array_replacement(self):
         self.assertEqual(run(CPP, '    cfg.set_key_value("extruder_clearance_radius", new ConfigOptionFloat(10));',
                              '    app_config->set("filament_colour", value);',
-                             '    config.set("nozzle_temperature", 220);'), [])
+                             '    config.set("nozzle_temperature", 220);',
+                             '    cfg.set_key_value("filament_colour", new ConfigOptionString("x"));',
+                             '    cfg.set_key_value("extruder_clearance_radius", new ConfigOptionEnum<Foo>(a));',
+                             '    app_config->set_key_value("filament_colour", v);'), [])
 
     def test_by_value_copy_and_logging_only_check(self):
         self.assertEqual(run(CPP, "    opt->values.resize(n);",

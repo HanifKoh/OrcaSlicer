@@ -168,6 +168,17 @@ def lookup_binding(lines, lineno, name):
     return None
 
 
+SCALAR_OPTION = re.compile(r'new\s+ConfigOption(?:(?:String|Int|Float|Bool|Percent|FloatOrPercent|EnumGeneric)\b|Enum\s*<)')
+
+
+def replaces_with_array(rest):
+    """True when the second argument of set_key_value is not a freshly built scalar option."""
+    m = re.match(r'\s*,\s*(.*)', rest, re.S)
+    if not m or re.match(r'\s*(?:\d|-|"|true\b|false\b)', m.group(1)):
+        return False
+    return not SCALAR_OPTION.match(m.group(1).lstrip())
+
+
 def classify(stmt, lines, lineno, path=""):
     """Return the reason this statement resizes a per-N array, else None."""
     code = mask_strings(stmt)
@@ -187,13 +198,14 @@ def classify(stmt, lines, lineno, path=""):
         if re.match(after_key + chain, rest) or re.match(after_key + r'->\s*values\s*=[^=]', rest):
             return "mutates a per-N array outside the cardinality layer and the bundle's slot functions"
         if re.search(r'\bset_deserialize\s*\(\s*$', before) \
-                or (re.search(r'\b(?:set_key_value|set)\s*\(\s*$', before)
-                    and not re.search(r'placeholder_parser|app_config', code)
-                    and re.match(r'\s*,\s*(?:new\s+ConfigOption\w*s(?:Nullable)?\b|[\w:>.-]*clone\s*\()', rest)):
+                or (re.search(r'\bset_key_value\s*\(\s*$', before) and not re.search(r'placeholder_parser|app_config', code)
+                    and replaces_with_array(rest)) \
+                or (re.search(r'\bset\s*\(\s*$', before) and not re.search(r'placeholder_parser|app_config', code)
+                    and re.match(r'\s*,\s*(?:new\s+ConfigOption\w*s(?:Nullable)?\b|std::vector\b|[\w:>.<()"-]*clone\s*\()', rest)):
             return "replaces a whole per-N array, which keeps its own length rather than the count that indexes it"
         if re.search(r'\bswap\s*\(\s*[^;]*$', before) and re.match(after_key + r'->\s*values\s*,', rest):
             return "swaps in the values of a per-N array, which keeps its own length rather than the count that indexes it"
-        if re.match(r'\s*\*', before) and re.match(after_key + r'=\s*ConfigOption\w*s(?:Nullable)?\b', rest):
+        if re.match(r'\s*\*', before) and re.match(after_key + r'=\s*(?:ConfigOption\w*s(?:Nullable)?\b|\*)', rest):
             return "assigns a whole per-N array, which keeps its own length rather than the count that indexes it"
     for m in TOKEN_RE.finditer(code):
         ident, rest = m.group(0), code[m.end():]
