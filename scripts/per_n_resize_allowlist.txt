@@ -1,0 +1,32 @@
+# Places allowed to size a per-N config array (one value per filament slot, extruder or
+# variant) by hand. scripts/check_per_n_resizes.py skips a hit that matches an entry.
+#
+# Format, one entry per line:   path :: scope :: reason
+# Scope is one of:
+#   file             every hit in the file
+#   function NAME    hits inside the column-0 function definition called NAME
+#   line TEXT        hits on an added line containing TEXT
+# The reason is required and is what a reviewer reads. Prefer function over line, and
+# line over file. See docs/HLSD/filament-slots.md for the owners.
+
+# The cardinality layer sizes every classified option.
+src/libslic3r/PrintConfigCardinality.cpp :: file :: the cardinality layer owns per-N sizing
+
+# The bundle owns the slot count and the arrays named in filament_slot_keys().
+src/libslic3r/PresetBundle.cpp :: function resize_filament_slot_arrays :: the one private resize of the slot arrays
+src/libslic3r/PresetBundle.cpp :: function set_num_filaments :: slot-count owner
+src/libslic3r/PresetBundle.cpp :: function insert_filament_slot :: slot-count owner
+src/libslic3r/PresetBundle.cpp :: function update_num_filaments :: slot-count owner
+src/libslic3r/PresetBundle.cpp :: function update_multi_material_filament_presets :: the nozzle-count top-up grows the slots
+src/libslic3r/PresetBundle.cpp :: line resize_filament_slot_arrays(std::max(target_slots :: published-project load grows the slot arrays through the bundle's own resize
+
+# The flush matrix helper and the extruder-count resize are the owners of their arrays.
+src/libslic3r/PrintConfig.cpp :: function resize_flush_volumes_matrix :: owner of the flush matrix layout
+src/libslic3r/PrintConfig.cpp :: function set_num_extruders :: owner of the per-extruder resize
+src/libslic3r/Preset.cpp :: function normalize :: preset-load sizing entry point, ahead of enforce_cardinality
+
+# The CLI has no bundle: it sizes its own project tables from the loaded filaments.
+src/OrcaSlicer.cpp :: line resize_flush_volumes_matrix(m_print_config, :: the CLI uses the shared flush-matrix helper
+src/OrcaSlicer.cpp :: line filament_self_index_opt->values.push_back :: CLI-private variant table, not a classified option
+src/OrcaSlicer.cpp :: line filament_variant_opt->values.push_back :: CLI-private variant table, not a classified option
+src/OrcaSlicer.cpp :: line filament_variant_opt->values.assign :: CLI-private variant table, not a classified option
