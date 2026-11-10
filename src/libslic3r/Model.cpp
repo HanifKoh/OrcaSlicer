@@ -4441,7 +4441,7 @@ void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_rel
     // (see Sidebar::on_action_add_filament's insertion remap for the same encoding).
     std::map<int, int> one_based_slots;
     for (const auto &[from, to] : slot_relocations)
-        one_based_slots.emplace(from + 1, to + 1);
+        one_based_slots.emplace(from + 1, std::max(to, 0) + 1);
 
     EnforcerBlockerStateMap paint_state_map;
     for (size_t state = 0; state < paint_state_map.size(); ++state)

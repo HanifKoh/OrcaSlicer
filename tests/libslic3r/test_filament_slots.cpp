@@ -1,6 +1,7 @@
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <string>
@@ -9,10 +10,13 @@
 
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/Model.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PrintConfigCardinality.hpp"
+#include "libslic3r/TriangleMesh.hpp"
+#include "libslic3r/TriangleSelector.hpp"
 
 using namespace Slic3r;
 
@@ -110,6 +114,48 @@ void set_mixed_tail(PresetBundle &bundle)
     mixed_flags(bundle) = { false, false, false, false, true };
     bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values      = { "", "", "", "", "2,3" };
     bundle.project_config.option<ConfigOptionStrings>("filament_mixed_sublayer_ratios")->values = { "", "", "", "", "0.5,0.5" };
+}
+
+// Physical slots named, coloured and flagged as given, then the mixed ones with their components.
+void set_slots(PresetBundle &bundle, size_t physical, const std::vector<std::string> &mix_components)
+{
+    const size_t n = physical + mix_components.size();
+    bundle.set_num_filaments(static_cast<unsigned int>(n), "#FFFFFF");
+    std::vector<std::string> colours, components(physical);
+    for (size_t i = 0; i < n; ++i) {
+        bundle.filament_presets[i] = (i < physical ? "P" : "M") + std::to_string(i + 1);
+        colours.push_back("#0000" + std::string(i < 10 ? "0" : "") + std::to_string(i));
+    }
+    components.insert(components.end(), mix_components.begin(), mix_components.end());
+    bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values      = colours;
+    bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values = components;
+    mixed_flags(bundle).assign(n, false);
+    std::fill(mixed_flags(bundle).begin() + physical, mixed_flags(bundle).end(), true);
+}
+
+bool mixed_tail_last(const PresetBundle &bundle)
+{
+    for (size_t i = 0; i + 1 < bundle.num_filament_slots(); ++i)
+        if (bundle.is_mixed_filament(i) && !bundle.is_mixed_filament(i + 1))
+            return false;
+    return true;
+}
+
+// An object of one cube on the given 1-based slot, with one facet painted with paint_state.
+ModelObject *add_object_on(Model &model, int slot, int paint_state)
+{
+    ModelObject *object = model.add_object();
+    ModelVolume *volume = object->add_volume(make_cube(10., 10., 10.));
+    volume->config.set_key_value("extruder", new ConfigOptionInt(slot));
+    TriangleSelector selector(volume->mesh());
+    selector.set_facet(0, EnforcerBlockerType(paint_state));
+    volume->mmu_segmentation_facets.set_data(selector.serialize());
+    return object;
+}
+
+bool painted_with(const ModelObject *object, int state)
+{
+    return TriangleSelector::has_facets(object->volumes.front()->mmu_segmentation_facets.get_data(), EnforcerBlockerType(state));
 }
 
 } // namespace
@@ -602,4 +648,87 @@ TEST_CASE("Syncing the AMS keeps each slot's values with a mix behind a High Flo
     CHECK(ints("filament_nozzle_map") == std::vector<int>{ 0, 0, 0, 3, 4 });
     CHECK(ints("filament_map").size() == 5);
     CHECK(bundle.ams_multi_color_filment.size() == 5);
+}
+
+TEST_CASE("Growing the physical filaments inserts them ahead of the mixed tail and records the moves", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    set_slots(bundle, 2, { "1,2" });
+    Model model;
+    const ModelObject *on_mix = add_object_on(model, 3, 3);
+
+    bundle.set_num_physical_filaments(4);
+    REQUIRE(bundle.num_filament_slots() == 5);
+    CHECK(bundle.num_physical_filaments() == 4);
+    CHECK(bundle.filament_slots_consistent());
+    CHECK(mixed_tail_last(bundle));
+    // The new slots copy the last physical preset; the mix keeps its preset, colour and components.
+    CHECK(bundle.filament_presets == std::vector<std::string>{ "P1", "P2", "P2", "P2", "M3" });
+    CHECK(strings(bundle, "filament_colour")[4] == "#000002");
+    CHECK(strings(bundle, "filament_mixed_components")[4] == "1,2");
+
+    const std::map<int, int> moved = bundle.take_pending_slot_relocations();
+    CHECK(moved == std::map<int, int>{ { 2, 4 } });
+    remap_model_filament_slots(model, moved);
+    CHECK(on_mix->volumes.front()->config.extruder() == 5);
+    CHECK(painted_with(on_mix, 5));
+    CHECK_FALSE(painted_with(on_mix, 3));
+
+    SECTION("and a list that has them already is left alone") {
+        bundle.set_num_physical_filaments(4);
+        CHECK(bundle.num_filament_slots() == 5);
+        CHECK(bundle.take_pending_slot_relocations().empty());
+    }
+}
+
+TEST_CASE("Shrinking the physical filaments removes the last ones and moves the mixed tail down", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    set_slots(bundle, 4, { "1,4", "2,3" });
+    Model model;
+    const ModelObject *on_mix     = add_object_on(model, 5, 6);
+    const ModelObject *on_removed = add_object_on(model, 3, 3);
+
+    bundle.set_num_physical_filaments(2);
+    REQUIRE(bundle.num_filament_slots() == 4);
+    CHECK(bundle.num_physical_filaments() == 2);
+    CHECK(bundle.filament_slots_consistent());
+    CHECK(mixed_tail_last(bundle));
+    CHECK(bundle.filament_presets == std::vector<std::string>{ "P1", "P2", "M5", "M6" });
+    CHECK(strings(bundle, "filament_colour") == std::vector<std::string>{ "#000000", "#000001", "#000004", "#000005" });
+    // A component on a removed filament gets the deleted marker, as a delete gives it.
+    CHECK(strings(bundle, "filament_mixed_components") == std::vector<std::string>{ "", "", "1,0", "2,0" });
+
+    const std::map<int, int> moved = bundle.take_pending_slot_relocations();
+    CHECK(moved == std::map<int, int>{ { 2, -1 }, { 3, -1 }, { 4, 2 }, { 5, 3 } });
+    remap_model_filament_slots(model, moved);
+    CHECK(on_mix->volumes.front()->config.extruder() == 3);
+    CHECK(painted_with(on_mix, 4));
+    CHECK_FALSE(painted_with(on_mix, 6));
+    // A removed filament's objects go to the first one.
+    CHECK(on_removed->volumes.front()->config.extruder() == 1);
+    CHECK(painted_with(on_removed, 1));
+    CHECK_FALSE(painted_with(on_removed, 3));
+
+    SECTION("but not below one filament") {
+        bundle.set_num_physical_filaments(0);
+        CHECK(bundle.num_physical_filaments() == 1);
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(mixed_tail_last(bundle));
+    }
+}
+
+TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots back ahead of the mixed tail", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    set_slots(bundle, 3, { "1,2" });
+    set_nozzle_count(bundle, 2);
+
+    bundle.set_num_physical_filaments(1);
+    CHECK(bundle.num_physical_filaments() == 2);
+    CHECK(bundle.num_filament_slots() == 3);
+    CHECK(bundle.filament_slots_consistent());
+    CHECK(mixed_tail_last(bundle));
+    // The removed filaments are gone, the mix moved down to behind the slot the top-up put back.
+    CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 1, -1 }, { 2, -1 }, { 3, 2 } });
 }

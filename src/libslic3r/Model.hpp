@@ -1969,6 +1969,7 @@ bool model_has_advanced_features(const Model &model);
 // multi-material color-painting states (paint state stores the one-based slot number).
 // slot_relocations maps the author's zero-based slot number to its final zero-based slot;
 // entries are applied simultaneously (no chained lookups), untouched slots keep everything.
+// A negative final slot marks a removed slot, whose references go to the first slot.
 void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations);
 
 #ifndef NDEBUG
