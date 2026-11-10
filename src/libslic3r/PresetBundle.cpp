@@ -3968,10 +3968,11 @@ void PresetBundle::update_selections(AppConfig &config)
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
+    // An empty list is saved as an empty string, which holds no colour pack rather than one empty pack.
     std::vector<std::string> multi_filament_colors;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_multi_colors")) {
-        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
-    }
+    if (const std::string saved_multi_colors = config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors");
+        !saved_multi_colors.empty())
+        boost::algorithm::split(multi_filament_colors, saved_multi_colors, boost::algorithm::is_any_of(","));
     if (multi_filament_colors.size() == 0) project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = filament_colors;
     else project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = multi_filament_colors;
 
@@ -4016,6 +4017,10 @@ void PresetBundle::update_selections(AppConfig &config)
     // No global fallback here: on a printer change the legacy shared keys describe another
     // printer's filament list, so absent per-printer keys must clear the mixes, not revive them.
     load_mixed_filament_settings(project_config, config, initial_printer_profile_name, filament_presets.size(), false);
+    // The colour packs come back at the length they were saved with and the AMS colour lists at the
+    // previous selection's: size every slot array to the restored list, whether or not the top-up below
+    // adds a slot.
+    resize_filament_slot_arrays(filament_presets.size(), std::string());
 
     // Update visibility of presets based on their compatibility with the active printer.
     // Always try to select a compatible print and filament preset to the current printer preset,
@@ -4131,10 +4136,11 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
+    // An empty list is saved as an empty string, which holds no colour pack rather than one empty pack.
     std::vector<std::string> multi_filament_colors;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_multi_colors")) {
-        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
-    }
+    if (const std::string saved_multi_colors = config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors");
+        !saved_multi_colors.empty())
+        boost::algorithm::split(multi_filament_colors, saved_multi_colors, boost::algorithm::is_any_of(","));
     if (multi_filament_colors.size() == 0) project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = filament_colors;
     else project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = multi_filament_colors;
 
@@ -4177,6 +4183,10 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
         project_config.option<ConfigOptionFloats>("flush_multiplier")->values = std::vector<double>(flush_multipliers.begin(), flush_multipliers.end());
     }
     load_mixed_filament_settings(project_config, config, initial_printer_profile_name, filament_presets.size(), true);
+    // The colour packs come back at the length they were saved with and the AMS colour lists at the
+    // previous selection's: size every slot array to the restored list, whether or not the top-up below
+    // adds a slot.
+    resize_filament_slot_arrays(filament_presets.size(), std::string());
 
     // Update visibility of presets based on their compatibility with the active printer.
     // Always try to select a compatible print and filament preset to the current printer preset,

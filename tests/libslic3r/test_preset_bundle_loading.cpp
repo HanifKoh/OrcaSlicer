@@ -6217,6 +6217,56 @@ TEST_CASE("The top-up keeps the colours a short saved selection lists for the sl
     }
 }
 
+// The app config keeps a printer's colour packs at the length they were written with, and an empty
+// list as an empty string. A restored selection holds one colour pack per filament either way, and
+// one AMS colour list per filament, without a top-up adding a slot.
+TEST_CASE("A restored selection holds one colour pack per filament", "[Preset][Bundle][FilamentSlots]")
+{
+    const bool on_startup = GENERATE(true, false);
+    CAPTURE(on_startup);
+
+    AppConfig app_config;
+    {
+        PresetBundle bundle;
+        add_inmemory_preset(bundle.printers, "Test Printer");
+        bundle.printers.select_preset_by_name("Test Printer", true);
+        add_inmemory_preset(bundle.filaments, "Test Filament");
+        bundle.filaments.select_preset_by_name("Test Filament", true);
+        bundle.set_num_filaments(3u, std::string("#111111"));
+        bundle.filament_presets.assign(3, "Test Filament");
+        bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values = { "#111111", "#222222", "#333333" };
+        bundle.export_selections(app_config);
+    }
+
+    PresetBundle bundle;
+    add_inmemory_preset(bundle.printers, "Test Printer");
+    add_inmemory_preset(bundle.filaments, "Test Filament");
+    const auto restore = [&]() {
+        if (on_startup) {
+            bundle.load_selections(app_config);
+        } else {
+            // The printer the switch comes from ran five filaments, three of them from the AMS.
+            bundle.set_num_filaments(5u, std::string("#FF0000"));
+            bundle.ams_multi_color_filment.assign(5, { "#FF0000" });
+            bundle.printers.select_preset_by_name("Test Printer", true);
+            bundle.update_selections(app_config);
+        }
+        REQUIRE(bundle.num_filament_slots() == 3);
+        CHECK(bundle.take_pending_slot_relocations().empty());
+        CHECK(bundle.filament_slots_consistent());
+        return bundle.project_config.option<ConfigOptionStrings>("filament_multi_colour")->values;
+    };
+
+    SECTION("colour packs saved for more filaments than the list names") {
+        app_config.set_printer_setting("Test Printer", "filament_multi_colors", "#111111 #AAAAAA,#222222,#333333,#444444");
+        CHECK(restore() == std::vector<std::string>{ "#111111 #AAAAAA", "#222222", "#333333" });
+    }
+    SECTION("an empty colour-pack list") {
+        app_config.set_printer_setting("Test Printer", "filament_multi_colors", "");
+        CHECK(restore() == std::vector<std::string>{ "#111111", "#222222", "#333333" });
+    }
+}
+
 // The startup sizing in GUI_App::load_current_presets targets the nozzle count plus the mixes.
 // That is a floor, never a ceiling: set_num_filaments() trims at the raw tail, which is exactly
 // where the mixes live, so applying the target to a longer list deletes them. A list longer than
