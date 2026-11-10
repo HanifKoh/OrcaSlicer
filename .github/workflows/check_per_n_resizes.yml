@@ -41,5 +41,8 @@ jobs:
       - name: Run the checker's own unit tests
         run: python3 -m unittest scripts/tests/test_check_per_n_resizes.py
 
+      - name: Look for allow-list entries that match nothing
+        run: python3 scripts/check_per_n_resizes.py --check-allowlist --warn-only
+
       - name: Look for hand-rolled per-N resizes
         run: python3 scripts/check_per_n_resizes.py HEAD^1 --head HEAD --github --warn-only

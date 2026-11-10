@@ -170,13 +170,15 @@ project.
   colour per filament with the matrix pairs it had; a one-filament project given two
   filaments slices with two.
 
-## Keeping the sizing paths the only ones
+## Keeping new code on the sizing paths
 
 `scripts/check_per_n_resizes.py` reads the lines a change adds under `src/` and flags the
-ones that resize a per-N array outside the owners above: calls to `set_num_filaments`,
-`set_num_extruders` and `resize_flush_volumes_matrix`, `resize`/`push_back`/`erase` and
-assignment on `filament_presets` or on the values of a slot or per-N option (by key, or
-through a variable bound to one), a `ConfigOptionVectorBase` resize, and a length check on
-a slot array that precedes a hand-rolled top-up. The owners are listed with their reasons in
-`scripts/per_n_resize_allowlist.txt`; a deliberate exception is a reviewed entry there.
-The pull-request job reports hits as warnings only, since the match is textual.
+ones that look like a hand-written resize of a per-N array: new call sites of
+`set_num_filaments`, `set_num_extruders` and `resize_flush_volumes_matrix`; `resize`,
+`push_back`, `erase`, `set_at` and assignment on `filament_presets` or on a slot or per-N
+option (named by key, or through a variable bound to one); replacing a whole array with
+`set_key_value`; a `ConfigOptionVectorBase` resize; and a length check on a slot array
+that precedes a hand-rolled top-up. The owners above are listed with their reasons in
+`scripts/per_n_resize_allowlist.txt`, and a deliberate exception is a reviewed entry there.
+The match is textual and the slot keys are read from `filament_slot_keys()`, so the pull-request
+job reports hits as warnings only.
