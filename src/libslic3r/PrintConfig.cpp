@@ -8,6 +8,7 @@
 #include "Config.hpp"
 #include "Geometry.hpp"
 #include "FilamentMixer.hpp"
+#include "PrintConfigCardinality.hpp"
 #include "MaterialType.hpp"
 #include "I18N.hpp"
 #include "LocalesUtils.hpp"
@@ -11411,6 +11412,97 @@ void insert_plate_filament_slot(DynamicPrintConfig &plate_config, size_t pos, in
     insert("filament_map", 1);
     insert("filament_nozzle_map", 0);
     insert("filament_volume_map", volume_type);
+}
+
+void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t> &order)
+{
+    const size_t n = order.size();
+    // Value i of a list takes value from[i] of the list as it was.
+    const auto reorder = [&config](const std::string &key, const std::vector<size_t> &from) {
+        auto *values = dynamic_cast<ConfigOptionVectorBase *>(config.option(key));
+        if (values == nullptr || values->size() != from.size())
+            return;
+        const std::unique_ptr<ConfigOption> old_values(values->clone());
+        for (size_t i = 0; i < from.size(); ++i)
+            values->set_at(old_values.get(), i, from[i]);
+    };
+
+    // A variant-expanded option holds a run of values per filament, filament_self_index naming the
+    // filament of each value; without the index there is one value per filament.
+    std::vector<size_t> variant_from = order;
+    auto               *self_index   = config.option<ConfigOptionInts>("filament_self_index");
+    if (self_index != nullptr) {
+        std::vector<std::vector<size_t>> runs(n);
+        for (size_t variant = 0; variant < self_index->size(); ++variant) {
+            const int filament = self_index->values[variant];
+            if (filament >= 1 && size_t(filament) <= n)
+                runs[filament - 1].push_back(variant);
+        }
+        variant_from.clear();
+        std::vector<int> new_self_index;
+        for (size_t slot = 0; slot < n; ++slot)
+            for (const size_t variant : runs[order[slot]]) {
+                variant_from.push_back(variant);
+                new_self_index.push_back(static_cast<int>(slot) + 1);
+            }
+        // An index naming a filament outside the slots cannot be laid out again.
+        if (variant_from.size() == self_index->size())
+            self_index->values = std::move(new_self_index);
+        else
+            variant_from.clear();
+    }
+    for (const std::string &key : config.keys()) {
+        const ConfigCardinality cardinality = cardinality_of(key);
+        if (cardinality == ConfigCardinality::PerFilament)
+            reorder(key, order);
+        else if (cardinality == ConfigCardinality::PerFilamentVariant)
+            reorder(key, variant_from);
+    }
+    for (const char *key : { "filament_settings_id", "filament_ids", "filament_map_2", "filament_max_temperature_drop_when_ec",
+                             "compatible_process_expression_group" })
+        reorder(key, order);
+
+    std::vector<size_t> columns(n + 2), pairs(2 * n);
+    for (size_t slot = 0; slot < n; ++slot) {
+        columns[slot + 1]   = order[slot] + 1;
+        pairs[2 * slot]     = 2 * order[slot];
+        pairs[2 * slot + 1] = 2 * order[slot] + 1;
+    }
+    columns[n + 1] = n + 1;
+    for (const char *key : { "inherits_group", "different_settings_to_system", "compatible_machine_expression_group" })
+        reorder(key, columns);
+    reorder("flush_volumes_vector", pairs);
+
+    // One block of n * n cells per nozzle.
+    const auto  *nozzles = config.option<ConfigOptionFloats>("nozzle_diameter");
+    const size_t blocks  = nozzles != nullptr && !nozzles->empty() ? nozzles->size() : 1;
+    std::vector<size_t> cells(n * n * blocks);
+    for (size_t block = 0; block < blocks; ++block)
+        for (size_t from = 0; from < n; ++from)
+            for (size_t to = 0; to < n; ++to)
+                cells[block * n * n + from * n + to] = block * n * n + order[from] * n + order[to];
+    reorder("flush_volumes_matrix", cells);
+
+    std::vector<int> new_id(n);
+    for (size_t slot = 0; slot < n; ++slot)
+        new_id[order[slot]] = static_cast<int>(slot) + 1;
+    for (const char *key : { "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id", "internal_solid_filament_id",
+                             "top_surface_filament_id", "bottom_surface_filament_id", "support_filament", "support_interface_filament",
+                             "wipe_tower_filament" })
+        if (auto *filament = config.option<ConfigOptionInt>(key); filament != nullptr && filament->value >= 1 && size_t(filament->value) <= n)
+            filament->value = new_id[filament->value - 1];
+    if (auto *components = config.option<ConfigOptionStrings>("filament_mixed_components"))
+        for (std::string &mix : components->values) {
+            std::vector<unsigned int> ids     = parse_mixed_components(mix);
+            bool                      renamed = false;
+            for (unsigned int &id : ids)
+                if (id >= 1 && id <= n && new_id[id - 1] != static_cast<int>(id)) {
+                    id      = static_cast<unsigned int>(new_id[id - 1]);
+                    renamed = true;
+                }
+            if (renamed)
+                mix = format_mixed_components(ids);
+        }
 }
 
 

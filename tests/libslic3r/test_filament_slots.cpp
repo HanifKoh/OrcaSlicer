@@ -823,3 +823,60 @@ TEST_CASE("A plate's filament maps take an inserted slot's defaults at its posit
         CHECK(ints("filament_map").front() == 1);
     }
 }
+
+TEST_CASE("Reordering the filament slots moves every per-filament value and renumbers the references", "[Preset][Bundle][FilamentSlots]")
+{
+    // Four slots, the third a mix of the first two with two variants of its own, as the CLI assembles
+    // a project of three slots loaded with a fourth filament.
+    DynamicPrintConfig config;
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{ 0.4 });
+    config.set_key_value("filament_type", new ConfigOptionStrings{ "PLA", "PETG", "MIX", "ABS" });
+    config.set_key_value("filament_is_mixed", new ConfigOptionBools{ false, false, true, false });
+    config.set_key_value("filament_mixed_components", new ConfigOptionStrings{ "", "", "1,2", "" });
+    config.set_key_value("filament_settings_id", new ConfigOptionStrings{ "a", "b", "m", "d" });
+    config.set_key_value("different_settings_to_system", new ConfigOptionStrings{ "process", "a", "b", "m", "d", "printer" });
+    config.set_key_value("filament_self_index", new ConfigOptionInts{ 1, 2, 3, 3, 4 });
+    config.set_key_value("filament_extruder_variant", new ConfigOptionStrings{ "a", "b", "m1", "m2", "d" });
+    config.set_key_value("filament_flow_ratio", new ConfigOptionFloats{ 1.0, 1.1, 1.2, 1.25, 1.3 });
+    config.set_key_value("flush_volumes_vector", new ConfigOptionFloats{ 0, 1, 10, 11, 20, 21, 30, 31 });
+    std::vector<double> matrix;
+    for (int from = 0; from < 4; ++from)
+        for (int to = 0; to < 4; ++to)
+            matrix.push_back(10 * from + to);
+    config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats(matrix));
+    config.set_key_value("outer_wall_filament_id", new ConfigOptionInt(3));
+    config.set_key_value("support_filament", new ConfigOptionInt(4));
+    config.set_key_value("sparse_infill_filament_id", new ConfigOptionInt(0));
+    REQUIRE(cardinality_of("filament_type") == ConfigCardinality::PerFilament);
+    REQUIRE(cardinality_of("filament_flow_ratio") == ConfigCardinality::PerFilamentVariant);
+
+    SECTION("the mix moves behind the extra filament") {
+        reorder_filament_slots(config, { 0, 1, 3, 2 });
+        CHECK(config.option<ConfigOptionStrings>("filament_type")->values == std::vector<std::string>{ "PLA", "PETG", "ABS", "MIX" });
+        CHECK(config.option<ConfigOptionBools>("filament_is_mixed")->values == std::vector<unsigned char>{ 0, 0, 0, 1 });
+        CHECK(config.option<ConfigOptionStrings>("filament_mixed_components")->values == std::vector<std::string>{ "", "", "", "1,2" });
+        CHECK(config.option<ConfigOptionStrings>("filament_settings_id")->values == std::vector<std::string>{ "a", "b", "d", "m" });
+        CHECK(config.option<ConfigOptionStrings>("different_settings_to_system")->values ==
+              std::vector<std::string>{ "process", "a", "b", "d", "m", "printer" });
+        CHECK(config.option<ConfigOptionInts>("filament_self_index")->values == std::vector<int>{ 1, 2, 3, 4, 4 });
+        CHECK(config.option<ConfigOptionStrings>("filament_extruder_variant")->values == std::vector<std::string>{ "a", "b", "d", "m1", "m2" });
+        CHECK(config.option<ConfigOptionFloats>("filament_flow_ratio")->values == std::vector<double>{ 1.0, 1.1, 1.3, 1.2, 1.25 });
+        CHECK(config.option<ConfigOptionFloats>("flush_volumes_vector")->values == std::vector<double>{ 0, 1, 10, 11, 30, 31, 20, 21 });
+        // The pair (ABS, MIX) is now (3, 4): it holds what the pair (4, 3) held.
+        CHECK(config.option<ConfigOptionFloats>("flush_volumes_matrix")->values[2 * 4 + 3] == 32);
+        CHECK(config.option<ConfigOptionFloats>("flush_volumes_matrix")->values[0 * 4 + 2] == 3);
+        CHECK(config.opt_int("outer_wall_filament_id") == 4);
+        CHECK(config.opt_int("support_filament") == 3);
+        CHECK(config.opt_int("sparse_infill_filament_id") == 0);
+    }
+    SECTION("a mix follows the filaments it is made of") {
+        reorder_filament_slots(config, { 1, 0, 2, 3 });
+        CHECK(config.option<ConfigOptionStrings>("filament_mixed_components")->values[2] == "2,1");
+        CHECK(config.option<ConfigOptionStrings>("filament_settings_id")->values == std::vector<std::string>{ "b", "a", "m", "d" });
+    }
+    SECTION("a list of another length is left as it is") {
+        config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#00FF00" });
+        reorder_filament_slots(config, { 0, 1, 3, 2 });
+        CHECK(config.option<ConfigOptionStrings>("filament_colour")->values == std::vector<std::string>{ "#FF0000", "#00FF00" });
+    }
+}

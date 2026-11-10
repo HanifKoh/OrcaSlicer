@@ -69,3 +69,11 @@ set_tests_properties(cli_malformed_input PROPERTIES
     LABELS "CLI;RequiresApp"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+add_test(NAME cli_mixed_overload
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_cli_mixed_overload.sh $<TARGET_FILE:OrcaSlicer> ${ORCA_CLI_TEST_PYTHON}
+        ${CMAKE_SOURCE_DIR}/resources/profiles/BBL)
+set_tests_properties(cli_mixed_overload PROPERTIES
+    LABELS "CLI;RequiresApp"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 600)

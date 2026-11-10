@@ -2527,6 +2527,7 @@ int CLI::run(int argc, char **argv)
 
     // More filaments loaded than the project has: the loaded count is the filament count, so the
     // per-filament arrays and the variant tables below are built for the loaded filaments too.
+    const int project_filament_count = filament_count;
     if (load_filament_count > filament_count)
         filament_count = load_filament_count;
 
@@ -4337,6 +4338,41 @@ int CLI::run(int argc, char **argv)
 
         sla_print_config.apply(m_print_config, true);
         m_print_config.apply(sla_print_config, true);*/
+    }
+
+    // The filaments loaded beyond a project's slots are physical, so with a mixed tail in the project they
+    // go ahead of it, as the GUI adds a filament: the mixed slots move to the end, and every list and
+    // reference that names a slot, the model's included, follows. The command line options are in the
+    // load order too and are applied again later, so they move the same way.
+    if (project_filament_count > 0 && filament_count > project_filament_count && has_any_mixed_filament(loaded_mixed_flags)) {
+        const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed");
+        const std::vector<unsigned char> is_mixed = is_mixed_opt != nullptr ? is_mixed_opt->values : std::vector<unsigned char>();
+        const auto mixed = [&is_mixed](size_t slot) { return slot < is_mixed.size() && is_mixed[slot]; };
+        std::vector<size_t> order;
+        for (const bool mixed_pass : { false, true })
+            for (size_t slot = 0; slot < static_cast<size_t>(filament_count); ++slot)
+                if (mixed(slot) == mixed_pass)
+                    order.push_back(slot);
+        std::map<int, int> moved;
+        for (size_t slot = 0; slot < order.size(); ++slot)
+            if (order[slot] != slot)
+                moved.emplace(static_cast<int>(order[slot]), static_cast<int>(slot));
+        if (!moved.empty()) {
+            BOOST_LOG_TRIVIAL(info) << filament_count << " filaments loaded onto a project of " << project_filament_count
+                                    << " with mixed slots: the mixed slots move behind the extra filaments";
+            reorder_filament_slots(m_print_config, order);
+            reorder_filament_slots(m_extra_config, order);
+            for (Model &model : m_models)
+                remap_model_filament_slots(model, moved);
+            // A plate's own maps hold the project's slots: the extra ones get the slot defaults first.
+            for (PlateData *plate : plate_data_src) {
+                for (const auto &[key, fill] : { std::pair<const char *, int>{ "filament_map", 1 }, { "filament_nozzle_map", 0 },
+                                                 { "filament_volume_map", static_cast<int>(NozzleVolumeType::nvtStandard) } })
+                    if (auto *map = plate->config.option<ConfigOptionInts>(key); map != nullptr && map->size() < order.size())
+                        map->values.resize(order.size(), fill);
+                reorder_filament_slots(plate->config, order);
+            }
+        }
     }
 
     std::map<std::string, std::string> validity = m_print_config.validate(true);
