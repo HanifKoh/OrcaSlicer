@@ -74,8 +74,8 @@ Every config key in the list is `PerFilament` in the cardinality classification,
 test holds the two lists to that.
 Physical filaments come first; mixed-colour slots, which are virtual and have no
 nozzle of their own, sit at the tail. `num_physical_filaments()` is the slot count
-minus the mixed flags, and `filament_slots_consistent()` states the invariant for
-tests and debugging.
+minus the mixed flags. `filament_slot_mismatches()` lists the arrays whose length is
+not the slot count, and `filament_slots_consistent()` is true when it is empty.
 
 Three operations change the slot count. Growth goes through one private resize,
 `resize_filament_slot_arrays`, that walks `filament_slot_keys()` and seeds every new
@@ -113,6 +113,39 @@ in the bundle (`next_filament_colour()`) so the GUI, the project load and the te
 draw from one sequence. Which slots are new is decided by the colour array's length,
 not by the preset list: a bundle that has not been given its selections yet runs the
 preset list ahead of the arrays, and its default colours must survive.
+
+### Normalising the slots
+
+A writer that leaves a slot array out of step with the slot count is a bug, and the
+array is read past its end by the sidebar, the AMS dialogs, the flush dialog and the
+colour pickers, which index the bundle's arrays by slot before any slice sizes them.
+`normalize_filament_slots()` is the net under the writers above: it puts the arrays
+back in step and logs the ones it repaired. The bundle's entry points that rewrite the
+slot arrays call it before they return: `load_selections`,
+`update_selections`, the project load (`load_config_file_config`), `sync_ams_list`,
+`reload_local_bundle` and `restore_selection`. The nozzle-count top-up calls it before it
+inserts, because the insertion keeps each array's values up to the colours' length and
+counts the mixed flags. On a consistent bundle it costs one length comparison per array.
+A bundle without selections has no slots and is left alone.
+
+The repair keeps every value an array has. An array does not say which slot a missing
+value belonged to, so the repair takes it to be a physical slot's, the slot a writer
+adds:
+
+- In every array and the AMS list the missing value goes ahead of the mixed tail (the
+  trailing run of mixed flags), and the tail stays last. All arrays take the same
+  position, so a slot's colour, maps and colour pack stay together. If the value was a
+  mixed slot's instead, the values of the slots behind it shift by one; only the writer
+  can put that right, so the repair counts as a writer bug either way.
+- It is seeded as a new slot's: the next palette colour, colour type 1, extruder 1,
+  nozzle map 0, standard flow, the slot's colour as its colour pack, empty mixed
+  metadata and an empty AMS colour list.
+- An extra value is cut at the end, where every reader already stops.
+
+Each distinct mismatch (array, length, slot count) is logged once as an error, with the
+values a long array lost. `filament_slot_repairs()` counts the calls that had something
+to repair and `last_filament_slot_repair()` lists what the last one found, so a test can
+hold a writer to leaving the slots in step.
 
 ### The nozzle-count top-up
 
@@ -177,7 +210,11 @@ project.
   the arrays with the list, inserts ahead of the mixed tail and reports the move; a
   single-extruder multi-material printer keeps the slots it has; new slots draw from the
   palette; a bundle without selections keeps its default colour; the flush matrix
-  resize keeps the pairs and nozzles the old layout had.
+  resize keeps the pairs and nozzles the old layout had; the normaliser reports each
+  array out of step, seeds what is missing, keeps the mixed tail last and counts its
+  repairs; the selection load, the project load and the AMS sync leave it nothing to
+  repair, and a sync with a mix behind a High Flow slot keeps every slot's values on
+  that slot.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS

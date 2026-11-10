@@ -15,6 +15,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <cassert>
 #include <cctype>
+#include <cstddef>
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
@@ -1880,6 +1881,7 @@ bool PresetBundle::reload_local_bundle(const std::string& preset_folder, const s
         // The reloaded printer may have more nozzles than the slots. The top-up runs on the live bundle
         // so the slot arrays grow with the preset list and the moves reach the owner of the model.
         update_multi_material_filament_presets();
+        normalize_filament_slots();
         calibrate_printer = calibration_printer;
         calibrate_filaments.swap(calibration_filaments);
         dir_user_presets_local.swap(local_dir);
@@ -4040,7 +4042,7 @@ void PresetBundle::update_selections(AppConfig &config)
             fp = first_visible_filament_name;
         }
     }
-
+    normalize_filament_slots();
 }
 
 // Load selections (current print, current filaments, current printer) from config.ini
@@ -4256,6 +4258,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     if (!initial_physical_printer_name.empty())
         physical_printers.select_printer(initial_physical_printer_name);
 
+    normalize_filament_slots();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": finished, preferred printer_model_id %1%")%preferred_selection.printer_model_id;
 }
 
@@ -4399,55 +4402,121 @@ std::string PresetBundle::next_filament_colour()
     return palette[m_next_palette_colour++ % (sizeof(palette) / sizeof(palette[0]))];
 }
 
-bool PresetBundle::filament_slots_consistent() const
+std::vector<PresetBundle::FilamentSlotMismatch> PresetBundle::filament_slot_mismatches() const
 {
+    std::vector<FilamentSlotMismatch> mismatches;
     const size_t n = num_filament_slots();
     for (const std::string &key : filament_slot_keys()) {
-        const auto *opt = dynamic_cast<const ConfigOptionVectorBase *>(project_config.option(key));
-        if (opt == nullptr || opt->size() != n)
-            return false;
+        const auto  *opt    = dynamic_cast<const ConfigOptionVectorBase *>(project_config.option(key));
+        const size_t length = opt == nullptr ? 0 : opt->size();
+        if (opt == nullptr || length != n)
+            mismatches.push_back({ key, length });
     }
-    return ams_multi_color_filment.size() == n;
+    if (ams_multi_color_filment.size() != n)
+        mismatches.push_back({ "ams_multi_color_filment", ams_multi_color_filment.size() });
+    return mismatches;
+}
+
+// Keep the first `keep` values of one slot array, or all it has when it is shorter, then bring it to n:
+// cut at the end, or add default values ahead of its last `tail` ones, the mixed slots. Returns where
+// the added values start and end.
+template<typename Values> static std::pair<size_t, size_t> resize_slot_values(Values &values, size_t n, size_t keep, size_t tail)
+{
+    values.resize(std::min(keep, values.size()));
+    const size_t first = values.size() - std::min(tail, values.size());
+    if (values.size() >= n) {
+        values.resize(n);
+        return { first, first };
+    }
+    const size_t added = n - values.size();
+    values.insert(values.begin() + static_cast<std::ptrdiff_t>(first), added, typename Values::value_type{});
+    return { first, first + added };
+}
+
+// Size every slot array of config to n with resize_slot_values, and seed the values an array gains as
+// a new slot's: the colour from colour_of(slot), colour type 1, extruder 1, standard flow, nozzle map 0,
+// the slot's colour as its colour pack and the mixed metadata empty.
+template<typename ColourOf>
+static void resize_slot_arrays(DynamicPrintConfig &config, size_t n, size_t keep, size_t tail, ColourOf &&colour_of)
+{
+    std::map<std::string, std::pair<size_t, size_t>> added;
+    for (const std::string &key : PresetBundle::filament_slot_keys())
+        with_slot_values(config.option(key, true), [&added, &key, n, keep, tail](auto &values) {
+            added[key] = resize_slot_values(values, n, keep, tail);
+        });
+    const auto seed = [&added](const char *key, auto &&set) {
+        for (size_t i = added[key].first; i < added[key].second; ++i)
+            set(i);
+    };
+
+    auto *colours       = config.option<ConfigOptionStrings>("filament_colour");
+    auto *colour_types  = config.option<ConfigOptionStrings>("filament_colour_type");
+    auto *maps          = config.option<ConfigOptionInts>("filament_map");
+    auto *volume_maps   = config.option<ConfigOptionInts>("filament_volume_map");
+    auto *multi_colours = config.option<ConfigOptionStrings>("filament_multi_colour");
+    seed("filament_colour", [&](size_t i) { colours->values[i] = colour_of(i); });
+    seed("filament_colour_type", [&](size_t i) { colour_types->values[i] = "1"; });
+    seed("filament_map", [&](size_t i) { maps->values[i] = 1; });
+    seed("filament_volume_map", [&](size_t i) { volume_maps->values[i] = static_cast<int>(NozzleVolumeType::nvtStandard); });
+    // A kept slot keeps its colour pack; only a new or missing entry starts as the single colour.
+    seed("filament_multi_colour", [&](size_t i) { multi_colours->values[i] = colours->values[i]; });
 }
 
 void PresetBundle::resize_filament_slot_arrays(size_t n, const std::string &new_colour)
 {
     // Which slots are new is a fact about the colour array, not about filament_presets: a bundle
-    // that has not been given its selections yet runs the preset list ahead of the arrays.
-    auto        *colours = project_config.option<ConfigOptionStrings>("filament_colour", true);
-    const size_t old_n   = colours->values.size();
-    colours->values.resize(n);
-    for (size_t i = old_n; i < n; ++i)
-        colours->values[i] = new_colour.empty() ? next_filament_colour() : new_colour;
-
-    // Every other array keeps its first old_n values and is sized to n; an array that was shorter
+    // that has not been given its selections yet runs the preset list ahead of the arrays. Every
+    // other array keeps at most as many values as the colours had, so an array that was shorter
     // than the colours gets the missing entries seeded as well.
-    std::map<std::string, size_t> kept;
-    for (const std::string &key : filament_slot_keys()) {
-        if (key == "filament_colour")
-            continue;
-        with_slot_values(project_config.option(key, true), [&kept, &key, old_n, n](auto &values) {
-            kept[key] = std::min(old_n, values.size());
-            values.resize(kept[key]);
-            values.resize(n);
-        });
-    }
-    ams_multi_color_filment.resize(std::min(old_n, ams_multi_color_filment.size()));
-    ams_multi_color_filment.resize(n);
+    const size_t old_n = project_config.option<ConfigOptionStrings>("filament_colour", true)->values.size();
+    resize_slot_arrays(project_config, n, old_n, 0, [this, &new_colour](size_t) { return new_colour.empty() ? next_filament_colour() : new_colour; });
+    resize_slot_values(ams_multi_color_filment, n, old_n, 0);
+}
 
-    auto *colour_types = project_config.option<ConfigOptionStrings>("filament_colour_type");
-    auto *maps         = project_config.option<ConfigOptionInts>("filament_map");
-    auto *volume_maps  = project_config.option<ConfigOptionInts>("filament_volume_map");
-    for (size_t i = kept["filament_colour_type"]; i < n; ++i)
-        colour_types->values[i] = "1";
-    for (size_t i = kept["filament_map"]; i < n; ++i)
-        maps->values[i] = 1;
-    for (size_t i = kept["filament_volume_map"]; i < n; ++i)
-        volume_maps->values[i] = static_cast<int>(NozzleVolumeType::nvtStandard);
-    // A kept slot keeps its colour pack; only a new or missing entry starts as the single colour.
-    auto *multi_colours = project_config.option<ConfigOptionStrings>("filament_multi_colour");
-    for (size_t i = kept["filament_multi_colour"]; i < n; ++i)
-        multi_colours->values[i] = colours->values[i];
+void PresetBundle::normalize_filament_slots()
+{
+    // A bundle not given its selections yet has no slots; its arrays hold the defaults the first
+    // selection sizes from.
+    const size_t n = num_filament_slots();
+    if (n == 0)
+        return;
+    std::vector<FilamentSlotMismatch> mismatches = filament_slot_mismatches();
+    if (mismatches.empty())
+        return;
+
+    // Each mismatch is logged once, with the values a long array loses.
+    std::string report;
+    for (const FilamentSlotMismatch &mismatch : mismatches) {
+        if (!m_logged_slot_mismatches.emplace(mismatch.key, mismatch.length, n).second)
+            continue;
+        report += (report.empty() ? "" : ", ") + mismatch.key + " " + std::to_string(mismatch.length);
+        if (mismatch.length <= n)
+            continue;
+        std::string dropped;
+        if (mismatch.key == "ams_multi_color_filment") {
+            for (size_t i = n; i < ams_multi_color_filment.size(); ++i)
+                dropped += (i > n ? "; " : "") + boost::algorithm::join(ams_multi_color_filment[i], " ");
+        } else {
+            const std::unique_ptr<ConfigOption> tail(project_config.option(mismatch.key)->clone());
+            with_slot_values(tail.get(), [n](auto &values) { values.erase(values.begin(), values.begin() + n); });
+            dropped = tail->serialize();
+        }
+        report += " (dropped " + dropped + ")";
+    }
+    if (!report.empty())
+        BOOST_LOG_TRIVIAL(error) << "Filament slot arrays out of step with the " << n << " filament slots, resized: " << report;
+
+    // Every array keeps the values it has. A missing value is a physical slot's, so in every array it
+    // goes ahead of the mixed tail (the trailing run of mixed flags), seeded as a new slot's, and the
+    // tail stays last.
+    const std::vector<unsigned char> &flags     = project_config.option<ConfigOptionBools>("filament_is_mixed", true)->values;
+    const auto                        last_flag = flags.rend() - static_cast<std::ptrdiff_t>(std::min(n, flags.size()));
+    const size_t                      tail      = static_cast<size_t>(std::find(last_flag, flags.rend(), false) - last_flag);
+    resize_slot_arrays(project_config, n, n, tail, [this](size_t) { return next_filament_colour(); });
+    resize_slot_values(ams_multi_color_filment, n, n, tail);
+
+    ++m_filament_slot_repairs;
+    m_last_filament_slot_repair = std::move(mismatches);
 }
 
 void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
@@ -4809,8 +4878,10 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         ams_filament_color_types.push_back(filament_color_type);
         ams_multi_color_filment.push_back(filament_multi_color);
     }
-    if (ams_filament_presets.empty())
+    if (ams_filament_presets.empty()) {
+        normalize_filament_slots();
         return 0;
+    }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "get filament_colour and from config";
     ConfigOptionStrings *filament_color = project_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *filament_color_type = project_config.option<ConfigOptionStrings>("filament_colour_type");
@@ -5184,6 +5255,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
     // Update ams_multi_color_filment
     update_filament_multi_color();
     update_multi_material_filament_presets();
+    normalize_filament_slots();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "finish sync ams list";
     return this->filament_presets.size();
 }
@@ -6083,6 +6155,7 @@ void PresetBundle::restore_selection(const Selection &selection)
     this->extruder_ams_counts = selection.extruder_ams_counts;
     // The snapshot's slots replace any the top-up above added, so the moves it recorded are void.
     m_pending_slot_relocations.clear();
+    normalize_filament_slots();
 }
 
 
@@ -7815,6 +7888,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
                 this->physical_printers.unselect_printer();
         }
     }
+    normalize_filament_slots();
     //BBS: add config related logs
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": finished");
 }
@@ -8653,6 +8727,9 @@ void PresetBundle::update_multi_material_filament_presets(const std::vector<std:
 {
     if (printers.get_edited_preset().printer_technology() != ptFFF)
         return;
+    // The insertion below keeps each array's values up to the colours' length and counts the mixed
+    // flags, so it needs the arrays in step.
+    normalize_filament_slots();
 
     // A tool changer feeds filament N from nozzle N, so it has one physical slot per nozzle, ahead
     // of the mixed tail. A printer feeding its filaments through shared nozzles
