@@ -180,6 +180,8 @@ TEST_CASE("Every slot array follows the preset list through growth, shrink and d
     bundle.set_num_filaments(2u);
     CHECK(bundle.num_filament_slots() == 2);
     CHECK(bundle.filament_slots_consistent());
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("filament_slot_keys lists one-per-filament vector options only", "[Preset][Bundle][FilamentSlots]")
@@ -255,6 +257,8 @@ TEST_CASE("The top-up inserts physical slots ahead of the mixed tail and reports
 
     CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 4, 6 } });
     CHECK(bundle.take_pending_slot_relocations().empty());
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("insert_filament_slot places the colour at the position and copies the preset before it", "[Preset][Bundle][FilamentSlots]")
@@ -349,6 +353,8 @@ TEST_CASE("A single-extruder multi-material printer keeps the slots it has", "[P
     CHECK(bundle.num_filament_slots() == 1);
     CHECK(bundle.take_pending_slot_relocations().empty());
     CHECK(bundle.filament_slots_consistent());
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("Deleting a slot the top-up puts back shifts the flush matrix", "[Preset][Bundle][FilamentSlots]")
@@ -365,6 +371,8 @@ TEST_CASE("Deleting a slot the top-up puts back shifts the flush matrix", "[Pres
     // The second filament is now first and a new slot follows it, so no pair of the deleted one survives.
     REQUIRE(bundle.num_filament_slots() == 2);
     CHECK(bundle.project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values == std::vector<double>{ 0, 20, 20, 0, 0, 20, 20, 0 });
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("insert_filament_slot sizes arrays that run behind the preset list first", "[Preset][Bundle][FilamentSlots]")
@@ -681,6 +689,8 @@ TEST_CASE("Growing the physical filaments inserts them ahead of the mixed tail a
         CHECK(bundle.num_filament_slots() == 5);
         CHECK(bundle.take_pending_slot_relocations().empty());
     }
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("Shrinking the physical filaments removes the last ones and moves the mixed tail down", "[Preset][Bundle][FilamentSlots]")
@@ -717,6 +727,8 @@ TEST_CASE("Shrinking the physical filaments removes the last ones and moves the 
         CHECK(bundle.filament_slots_consistent());
         CHECK(mixed_tail_last(bundle));
     }
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots back ahead of the mixed tail", "[Preset][Bundle][FilamentSlots]")
@@ -732,6 +744,8 @@ TEST_CASE("A tool changer shrunk below its nozzle count gets the missing slots b
     CHECK(mixed_tail_last(bundle));
     // The removed filaments are gone, the mix moved down to behind the slot the top-up put back.
     CHECK(bundle.take_pending_slot_relocations() == std::map<int, int>{ { 1, -1 }, { 2, -1 }, { 3, 2 } });
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("An imported object naming a mixed slot gets a physical filament of its own", "[Preset][Bundle][FilamentSlots]")
@@ -780,6 +794,8 @@ TEST_CASE("An imported object naming a mixed slot gets a physical filament of it
         CHECK(bundle.num_filament_slots() == 3);
         CHECK(on_mix->volumes.front()->config.extruder() == 3);
     }
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("set_num_filaments refuses to cut across the mixed tail", "[Preset][Bundle][FilamentSlots]")
@@ -797,6 +813,8 @@ TEST_CASE("set_num_filaments refuses to cut across the mixed tail", "[Preset][Bu
         CHECK(bundle.num_filament_slots() == 5);
         CHECK(bundle.filament_slots_consistent());
     }
+    INFO(describe(bundle.last_filament_slot_repair()));
+    CHECK(bundle.filament_slot_repairs() == 0);
 }
 
 TEST_CASE("A plate's filament maps take an inserted slot's defaults at its position", "[Preset][Bundle][FilamentSlots]")

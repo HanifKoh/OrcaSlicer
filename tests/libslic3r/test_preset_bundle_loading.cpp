@@ -5925,6 +5925,8 @@ TEST_CASE("An AMS sync keeps every slot array in step with the slots", "[Preset]
     const auto check_synced = [&bundle, &project](const std::vector<std::string> &colours) {
         const size_t slots = colours.size();
         CHECK(bundle.filament_slots_consistent());
+        // The sync and its top-up leave the normaliser nothing to repair.
+        CHECK(bundle.filament_slot_repairs() == 0);
         CHECK(bundle.num_filament_slots() == slots);
         CHECK(bundle.num_physical_filaments() == slots - 1);
         CHECK(bundle.is_mixed_filament(slots - 1));

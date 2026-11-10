@@ -249,21 +249,24 @@ extra filaments therefore print with the tool numbers of the slots ahead of the 
   follows the preset list through growth, shrink, insert and delete; the top-up grows
   the arrays with the list, inserts ahead of the mixed tail and reports the move; a
   single-extruder multi-material printer keeps the slots it has; new slots draw from the
-  palette; a bundle without selections keeps its default colour; the flush matrix
-  resize keeps the pairs and nozzles the old layout had; the normaliser reports each
-  array out of step, seeds what is missing, keeps the mixed tail last and counts its
-  repairs; the selection load, the project load and the AMS sync leave it nothing to
+  palette; a bundle without selections keeps its default colour; the flush matrix resize
+  keeps the pairs and nozzles the old layout had; the normaliser reports each array out
+  of step, seeds what is missing, keeps the mixed tail last and counts its repairs; the
+  selection load, the project load, the AMS sync, the top-up's insertion ahead of the
+  mixed tail, a delete, the physical count call and a refused shrink leave it nothing to
   repair, and a sync with a mix behind a High Flow slot keeps every slot's values on
-  that slot; the physical count grows and shrinks with the mixed tail last and the
-  model following; an imported object naming a mixed slot gets a filament of its own; a
-  shrink across the mixed tail is refused; a plate's maps take an inserted slot at its
+  that slot; the physical count grows and shrinks with the mixed tail last and the model
+  following; an imported object naming a mixed slot gets a filament of its own; a shrink
+  across the mixed tail is refused; a plate's maps take an inserted slot at its
   position; moving or removing a slot re-points every reference the model makes to it;
   the CLI's reorder moves every per-filament value and renumbers the references and a
   plate's print sequences.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
-  sync hold one value per slot in every array without the top-up adding a slot.
+  sync hold one value per slot in every array without the top-up adding a slot, and an
+  AMS sync that changes the slot count with a mix present leaves the normaliser nothing
+  to repair.
 - `cli_short_palette` (`tests/cli/test_cli_short_palette.sh`): a two-filament project
   carrying one colour and a three-filament matrix slices on the CLI and exports one
   colour per filament with the matrix pairs it had; a one-filament project given two
