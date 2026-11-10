@@ -9642,7 +9642,6 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         ;
                     }
                     else {
-                        this->model.plates_custom_gcodes = model.plates_custom_gcodes;
                         this->model.design_info = model.design_info;
                         this->model.model_info = model.model_info;
                     }
@@ -9931,6 +9930,9 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     }
                     if (!silence) wxGetApp().app_config->update_config_dir(path.parent_path().string());
                 }
+                // The plates' tool changes go to the plater after the slot moves of this load re-pointed them.
+                if (!load_model || load_config)
+                    this->model.plates_custom_gcodes = model.plates_custom_gcodes;
             } else {
                 // BBS: add plate data related logic
                 PlateDataPtrs& plate_data = parsed_file.plates;

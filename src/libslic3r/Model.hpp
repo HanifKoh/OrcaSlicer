@@ -1970,8 +1970,9 @@ bool model_has_advanced_features(const Model &model);
 // color-painting states (paint state stores the one-based slot number) and the plates' tool changes.
 // slot_relocations maps the old zero-based slot number to its final zero-based slot; entries are
 // applied simultaneously (no chained lookups), untouched slots keep everything. A negative final
-// slot marks a removed slot, handled as a delete without a replacement: objects and volumes on it
-// go to the first filament, its paint is cleared, and its other options and tool changes are dropped.
+// slot marks a removed slot: objects and volumes on it go to the first filament, its paint is cleared
+// and its tool changes are dropped, as a delete without a replacement does; its other options are
+// dropped too, so the object falls back to its default filament.
 void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations);
 
 #ifndef NDEBUG
