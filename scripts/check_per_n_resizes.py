@@ -38,7 +38,7 @@ KEY_FAMILY = re.compile(
     r'^(filament_\w+|nozzle_\w+|extruder_\w+|printer_extruder_\w+|machine_max_\w+|'
     r'flush_volumes_\w+|flush_multiplier|ams_multi_color_filment|default_filament_colour)$')
 
-MUTATORS = r"(?:resize|push_back|emplace_back|insert|erase|clear|assign|pop_back|swap|set_at|set|append)"
+MUTATORS = r"(?:resize|push_back|emplace_back|insert|erase|clear|assign|pop_back|swap|set_at|set|append|deserialize)"
 OPT_SRC = re.compile(r'\boption(?:_throw)?\s*(?:<[^>]*>)?\s*\(|\bopt(?:ptr)?\s*(?:<[^>]*>)?\s*\(|'
                      r'\bget_option\b|dynamic_cast\s*<\s*(?:const\s+)?ConfigOption')
 CALL_OWNERS = {
@@ -136,10 +136,10 @@ def bind_info(stmt):
     if "ConfigOptionVectorBase" in code:
         return name, "base"
     has_key = any(is_per_n_key(k) for k in re.findall(r'"(\w+)"', rhs))
-    if has_key and OPT_SRC.search(rhs):
+    if has_key and OPT_SRC.search(rhs) and not re.search(r'(?:->|\.)\s*values\s*[;)}]*\s*$', rhs.strip()):
         return name, "opt"
-    if re.search(r'(?:(?:->|\.)\s*values|filament_presets|ams_multi_color_filment)\s*[;)}]*\s*$', rhs.strip()) \
-            and (has_key or TOKEN_RE.search(rhs)):
+    if "&" in code[:m.start(1)] and (has_key or TOKEN_RE.search(rhs)) \
+            and re.search(r'(?:(?:->|\.)\s*values|filament_presets|ams_multi_color_filment)\s*[;)}]*\s*$', rhs.strip()):
         return name, "ref"
     return None
 
@@ -158,6 +158,8 @@ def statement_at(lines, i, limit=6):
 def lookup_binding(lines, lineno, name):
     """Kind of the per-N binding of name in the LOOKBACK lines above 1-based lineno, or None."""
     for i in range(min(lineno - 2, len(lines) - 1), max(lineno - 2 - LOOKBACK, -1), -1):
+        if lines[i].startswith("}"):
+            return None
         if name not in lines[i]:
             continue
         info = bind_info(statement_at(lines, i))
@@ -184,9 +186,14 @@ def classify(stmt, lines, lineno, path=""):
         rest, before = code[m.end():], code[:m.start()]
         if re.match(after_key + chain, rest) or re.match(after_key + r'->\s*values\s*=[^=]', rest):
             return "mutates a per-N array outside the cardinality layer and the bundle's slot functions"
-        if re.search(r'\b(?:set_key_value|set)\s*\(\s*$', before) and "placeholder_parser" not in code:
+        if re.search(r'\bset_deserialize\s*\(\s*$', before) \
+                or (re.search(r'\b(?:set_key_value|set)\s*\(\s*$', before)
+                    and not re.search(r'placeholder_parser|app_config', code)
+                    and re.match(r'\s*,\s*(?:new\s+ConfigOption\w*s(?:Nullable)?\b|[\w:>.-]*clone\s*\()', rest)):
             return "replaces a whole per-N array, which keeps its own length rather than the count that indexes it"
-        if re.match(r'\s*\*', before) and re.match(after_key + r'=[^=]', rest):
+        if re.search(r'\bswap\s*\(\s*[^;]*$', before) and re.match(after_key + r'->\s*values\s*,', rest):
+            return "swaps in the values of a per-N array, which keeps its own length rather than the count that indexes it"
+        if re.match(r'\s*\*', before) and re.match(after_key + r'=\s*ConfigOption\w*s(?:Nullable)?\b', rest):
             return "assigns a whole per-N array, which keeps its own length rather than the count that indexes it"
     for m in TOKEN_RE.finditer(code):
         ident, rest = m.group(0), code[m.end():]
@@ -202,13 +209,19 @@ def classify(stmt, lines, lineno, path=""):
     names = {m.group(1) for m in re.finditer(r'\b(\w+)\s*(?:->|\.)\s*(?:values\s*(?:->|\.)\s*)?' + MUTATORS + r'\s*\(', code)}
     names |= {m.group(1) for m in re.finditer(r'\b(\w+)\s*->\s*values\s*=[^=]', code)}
     names |= {m.group(1) for m in re.finditer(r'(?:^|[;{(]\s*)\*\s*(\w+)\s*=[^=]', code)}
+    names |= {m.group(1) for m in re.finditer(r'\bswap\s*\(\s*(\w+)\s*->\s*values\b', code)}
+    own = {}
+    for piece in re.split(r';', code) + re.findall(r'\b(?:if|while)\s*\(([^;]*)', code):
+        info = bind_info(piece)
+        if info:
+            own[info[0]] = info[1]
     for name in sorted(names - {"this"}):
-        kind = lookup_binding(lines, lineno, name)
+        kind = own.get(name) or lookup_binding(lines, lineno, name)
         if kind == "base":
             return "resizes a ConfigOptionVectorBase pointer; enforce_cardinality sizes per-N options"
         if kind in ("opt", "ref"):
             return "mutates a variable bound to a per-N array outside the cardinality layer and the slot functions"
-    if not re.search(r'\b(?:return|continue|break|throw)\b', code):
+    if not re.search(r'\b(?:return|continue|break|throw|BOOST_LOG_TRIVIAL|printf)\b', code):
         size_lt = r'(?:->|\.)\s*values\s*\.\s*size\(\)\s*<(?![=<])'
         if re.search(r'\w*(?:' + STEM_RE + r')\w*\s*' + size_lt, code) \
                 or re.search(r'"(\w+)"[^;]*?\)\s*->\s*values\s*\.\s*size\(\)\s*<(?![=<])', code) \
@@ -229,7 +242,7 @@ def load_allowlist(path=ALLOWLIST):
             if not raw or raw.startswith("#"):
                 continue
             parts = [p.strip() for p in raw.split(" :: ", 2)]
-            if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+            if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2] or "*" in parts[0]:
                 raise ValueError(f"allow-list entry needs 'path :: scope :: reason': {raw}")
             scope = parts[1].split(None, 1)
             kind, arg = scope[0], (scope[1] if len(scope) > 1 else "")
@@ -245,15 +258,14 @@ def load_allowlist(path=ALLOWLIST):
     return entries
 
 
-def stale_entries(entries, read_file):
+def stale_entries(entries, read_file, exists=lambda _p: True):
     """Entries whose path, function or text no longer exists in the head tree."""
     stale = []
     for epath, kind, arg in entries:
-        try:
-            lines = read_file(epath)
-        except (subprocess.CalledProcessError, OSError):
+        if not exists(epath):
             stale.append((epath, kind, arg))
             continue
+        lines = read_file(epath)
         if kind == "function" and not any(re.match(r'[^\s}#/*{][^;]*\b' + re.escape(arg) + r'\s*\(', l) for l in lines):
             stale.append((epath, kind, arg))
         elif kind == "line" and not any(arg in l for l in lines):
@@ -367,7 +379,8 @@ def main(argv=None):
         return git("show", f"{args.head}:{path}").splitlines()
 
     if args.check_allowlist:
-        stale = stale_entries(entries, read_file)
+        stale = stale_entries(entries, read_file, lambda p: subprocess.run(
+            ["git", "-C", ROOT, "cat-file", "-e", f"{args.head}:{p}"], capture_output=True).returncode == 0)
         for e in stale:
             print(f"stale allow-list entry: {e[0]} :: {e[1]} {e[2]}".rstrip())
         return 0 if (args.warn_only or not stale) else 1

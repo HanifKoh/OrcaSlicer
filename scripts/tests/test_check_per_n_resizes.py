@@ -87,6 +87,19 @@ class FlaggedLines(unittest.TestCase):
         self.assertEqual(len(run(CPP, '    *cfg.option<ConfigOptionFloats>("nozzle_diameter") = ConfigOptionFloats(v);')), 1)
         self.assertEqual(len(run(CPP, "    opt->set(other);", context=[BIND])), 1)
 
+    def test_binding_in_the_same_statement(self):
+        found = run(CPP, '    if (auto *opt = cfg.option<ConfigOptionStrings>("filament_colour"))',
+                    "        opt->values = colours;")
+        self.assertEqual([f[1] for f in found], [11])
+        found = run(CPP, '    if (auto *o = dynamic_cast<ConfigOptionStrings *>(cfg.option("filament_settings_id"))) o->values.resize(n);')
+        self.assertEqual(len(found), 1)
+
+    def test_swap_deserialize_and_vector_replacement(self):
+        self.assertEqual(len(run(CPP, '    std::swap(cfg.option<ConfigOptionInts>("filament_map")->values, other);')), 1)
+        self.assertEqual(len(run(CPP, '    cfg.set_deserialize("filament_colour", text);')), 1)
+        self.assertEqual(len(run(CPP, '    cfg.option<ConfigOptionStrings>("filament_colour")->deserialize(text);')), 1)
+        self.assertEqual(len(run(CPP, '    cfg.set_key_value("nozzle_diameter", opt->clone());')), 1)
+
     def test_filament_presets_edit(self):
         self.assertEqual(len(run(CPP, "    bundle.filament_presets.push_back(name);")), 1)
 
@@ -116,6 +129,19 @@ class IgnoredLines(unittest.TestCase):
 
     def test_bounds_guard_that_returns(self):
         self.assertEqual(run(CPP, "    if (project_filament_colors_option->values.size() <= idx) return;"), [])
+
+    def test_scalars_and_app_config_are_not_array_replacement(self):
+        self.assertEqual(run(CPP, '    cfg.set_key_value("extruder_clearance_radius", new ConfigOptionFloat(10));',
+                             '    app_config->set("filament_colour", value);',
+                             '    config.set("nozzle_temperature", 220);'), [])
+
+    def test_by_value_copy_and_logging_only_check(self):
+        self.assertEqual(run(CPP, "    opt->values.resize(n);",
+                             context=['    std::vector<std::string> opt = cfg.option<ConfigOptionStrings>("filament_colour")->values;']), [])
+        self.assertEqual(run(CPP, "    if (filament_colour_option->values.size() < n) BOOST_LOG_TRIVIAL(warning) << 1;"), [])
+
+    def test_binding_lookup_stops_at_the_enclosing_function(self):
+        self.assertEqual(run(CPP, "    opt->values.resize(n);", context=[BIND, "}", "void other()", "{"]), [])
 
     def test_declaration_is_not_a_call(self):
         self.assertEqual(run("src/libslic3r/Foo.hpp", "    void set_num_filaments(unsigned int n);"), [])
@@ -156,7 +182,7 @@ class AllowList(unittest.TestCase):
     def test_invalid_entries_are_rejected(self):
         for bad in ("src/a.cpp :: file", "src/a.cpp :: file ::", " :: file :: r", "src/a.cpp :: file x :: r",
                     "src/a.cpp :: line short :: r", "src/a.cpp :: function :: r", "src/a.cpp :: nope x :: r",
-                    "src/a.cpp::file::r"):
+                    "src/a.cpp::file::r", "src/*.cpp :: file :: r"):
             with self.assertRaises(ValueError, msg=bad):
                 self.parse(bad)
 

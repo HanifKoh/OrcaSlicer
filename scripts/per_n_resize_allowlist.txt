@@ -26,7 +26,8 @@ src/libslic3r/PrintConfig.cpp :: function set_num_extruders :: owner of the per-
 src/libslic3r/Preset.cpp :: function normalize :: preset-load sizing entry point, ahead of enforce_cardinality
 
 # Generic option machinery that is not tied to a per-N key.
-src/libslic3r/Config.cpp :: file :: generic ConfigOption merge and apply code
+src/libslic3r/Config.cpp :: function apply_only :: key-agnostic merge of one indexed value, not tied to a per-N key
+src/libslic3r/Config.cpp :: function read_cli :: clears a vector option before filling it from the command line
 
 # The CLI has no bundle: it sizes its own project tables from the loaded filaments.
 src/OrcaSlicer.cpp :: line resize_flush_volumes_matrix(m_print_config, :: the CLI uses the shared flush-matrix helper
