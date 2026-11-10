@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end check that a project with a mixed filament, given more filaments than it has slots, takes
-# the extra filament ahead of the mix. A project of two filaments and a mix of them, with the cube on the
-# mix, sliced with a fourth filament: the export must hold the extra filament in the third slot and the
-# mix in the fourth, the mix still made of the first two, and the cube on the mix.
+# the extra filament ahead of the mix. A project of two filaments and a mix of them, naming the mix every
+# way a model can, sliced with a fourth filament: the export must hold the extra filament in the third
+# slot and the mix in the fourth, the mix still made of the first two, every reference still on the mix,
+# and the per-filament lists of the same layout loaded directly.
 #
 # usage: test_cli_mixed_overload.sh <orca-slicer binary> <python3> <resources/profiles/BBL>
 set -u
@@ -34,10 +35,10 @@ EOF2
 
 # slice <tag> <input> [option...]: slice into $WORK/<tag>/out.3mf with a fresh data directory.
 slice() {
-    local out="$WORK/$1" input="$2"; shift 2
+    local tag="$1" out="$WORK/$1" input="$2"; shift 2
     mkdir -p "$out"
     timeout 300 "$BIN" --datadir "$out/datadir" "$@" --slice 0 --outputdir "$out" --export-3mf out.3mf "$input" \
-        > "$out/log" 2>&1 || { echo "FAIL: $1: orca-slicer exited $?"; tail -n 40 "$out/log"; exit 1; }
+        > "$out/log" 2>&1 || { echo "FAIL: $tag: orca-slicer exited $?"; tail -n 40 "$out/log"; exit 1; }
 }
 
 BASIC="$PROFILES/filament/Bambu PLA Basic @BBL P1S 0.4 nozzle.json"
@@ -51,20 +52,63 @@ slice project "$WORK/cube.stl" \
     --filament-colour "#FF0000;#0000FF;#800080" \
     --filament-is-mixed=0,0,1 --filament-mixed-components ";;1,2" --filament-mixed-sublayer-ratios ";;0.5,0.5"
 
-slice overload "$WORK/project/out.3mf" --load-filaments "$BASIC;$MATTE;$BASIC;$ABS"
+# Besides the cube's extruder, the mix is named by an object and a part feature filament, a height range
+# and the plate's first-layer order.
+"$PY" - "$WORK/project/out.3mf" "$WORK/references.3mf" <<'EOF2' || exit $?
+import sys, zipfile
 
-"$PY" - "$WORK/project/out.3mf" "$WORK/overload/out.3mf" <<'EOF2' || { tail -n 40 "$WORK/overload/log"; exit 1; }
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+    for item in zin.infolist():
+        if "gcode" in item.filename:
+            continue
+        data = zin.read(item.filename)
+        if item.filename == "Metadata/model_settings.config":
+            text = data.decode()
+            edits = (('<metadata key="extruder" value="3"/>',
+                      '<metadata key="extruder" value="3"/>\n    <metadata key="sparse_infill_filament_id" value="3"/>'),
+                     ('<part id="1" subtype="normal_part">',
+                      '<part id="1" subtype="normal_part">\n      <metadata key="outer_wall_filament_id" value="3"/>'),
+                     ('<metadata key="locked" value="false"/>',
+                      '<metadata key="locked" value="false"/>\n    <metadata key="first_layer_print_sequence" value="3 1 2"/>'),
+                     ('    <metadata key="gcode_file" value="Metadata/plate_1.gcode"/>\n', ''))
+            for old, new in edits:
+                if old not in text:
+                    print("FAIL: the base project's model settings have no %r" % old)
+                    sys.exit(1)
+                text = text.replace(old, new)
+            data = text.encode()
+        zout.writestr(item, data)
+    zout.writestr("Metadata/layer_config_ranges.xml",
+                  '<?xml version="1.0" encoding="utf-8"?>\n<objects>\n <object id="1">\n  <range min_z="4" max_z="8">\n'
+                  '   <option opt_key="extruder">3</option>\n   <option opt_key="layer_height">0.2</option>\n  </range>\n'
+                  ' </object>\n</objects>\n')
+EOF2
+
+slice overload "$WORK/references.3mf" --load-filaments "$BASIC;$MATTE;$BASIC;$ABS"
+# The layout the over-load must end in, loaded directly: the extra ABS third, the mix fourth.
+slice control "$WORK/cube.stl" \
+    --load-settings "$PROFILES/machine/Bambu Lab P1S 0.4 nozzle.json;$PROFILES/process/0.20mm Standard @BBL X1C.json" \
+    --load-filaments "$BASIC;$MATTE;$ABS;$BASIC" --load-filament-ids 4 \
+    --filament-colour "#FF0000;#0000FF;#FF0000;#800080" \
+    --filament-is-mixed=0,0,0,1 --filament-mixed-components ";;;1,2" --filament-mixed-sublayer-ratios ";;;0.5,0.5"
+
+"$PY" - "$WORK/project/out.3mf" "$WORK/overload/out.3mf" "$WORK/control/out.3mf" <<'EOF2' || { tail -n 40 "$WORK/overload/log"; exit 1; }
 import json, re, sys, zipfile
 
 def read(path):
     with zipfile.ZipFile(path) as z:
+        names = z.namelist()
         config = json.loads(z.read("Metadata/project_settings.config"))
         model = z.read("Metadata/model_settings.config").decode()
-        gcode = [z.read(n).decode() for n in z.namelist() if re.match(r"Metadata/plate_\d+\.gcode$", n)]
-    return config, model, gcode
+        ranges = z.read("Metadata/layer_config_ranges.xml").decode() if "Metadata/layer_config_ranges.xml" in names else ""
+        info = z.read("Metadata/slice_info.config").decode() if "Metadata/slice_info.config" in names else ""
+        gcode = [z.read(n).decode() for n in names if re.match(r"Metadata/plate_\d+\.gcode$", n)]
+    return config, model, ranges, info, gcode
 
-project, project_model, _ = read(sys.argv[1])
-config, model, gcode = read(sys.argv[2])
+project, project_model, _, _, _ = read(sys.argv[1])
+config, model, ranges, info, gcode = read(sys.argv[2])
+control = read(sys.argv[3])[0]
 errors = []
 if [int(v) for v in project.get("filament_is_mixed", [])] != [0, 0, 1]:
     errors.append("the base project does not have its mix in the third slot: %r" % project.get("filament_is_mixed"))
@@ -88,11 +132,22 @@ if config.get("inherits_group", [""])[-1] != project.get("inherits_group", [""])
 extruders = len(config["nozzle_diameter"])
 if len(config.get("flush_volumes_matrix", [])) != 16 * extruders:
     errors.append("flush_volumes_matrix has %d entries for 4 filaments" % len(config.get("flush_volumes_matrix", [])))
-# The cube was on the mix, and still is.
+# The cube was on the mix, and every reference to the mix still is.
 if 'key="extruder" value="3"' not in project_model:
     errors.append("the base project's cube is not on the mix")
-if 'key="extruder" value="4"' not in model or 'key="extruder" value="3"' in model:
-    errors.append("the cube did not follow the mix to the fourth slot")
+for key, value in (("extruder", "4"), ("sparse_infill_filament_id", "4"), ("outer_wall_filament_id", "4"),
+                   ("first_layer_print_sequence", "4 1 2 3")):
+    found = re.findall(r'key="%s" value="([^"]*)"' % key, model)
+    if found != [value]:
+        errors.append("%s is %r, not %r on the mix" % (key, found, value))
+if re.findall(r'opt_key="extruder">(\d+)<', ranges) != ["4"]:
+    errors.append("the height range did not follow the mix: %r" % ranges)
+if re.search(r'<filament id="3"', info):
+    errors.append("the extra filament prints part of what the mix should")
+# The per-filament lists of the layout loaded directly, the drying runs of every filament included.
+for key in sorted(k for k in control if k.startswith("filament_") and k not in ("filament_colour", "filament_multi_colour")):
+    if config.get(key) != control.get(key):
+        errors.append("%s is %s, loaded directly %s" % (key, str(config.get(key))[:120], str(control.get(key))[:120]))
 if not gcode:
     errors.append("no G-code in the exported project")
 elif not re.search(r"^M620 S1A", gcode[0], re.M) and not re.search(r"^T1\b", gcode[0], re.M):

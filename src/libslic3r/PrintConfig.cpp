@@ -11417,11 +11417,16 @@ void insert_plate_filament_slot(DynamicPrintConfig &plate_config, size_t pos, in
 void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t> &order)
 {
     const size_t n = order.size();
-    // Value i of a list takes value from[i] of the list as it was.
+    // Value i of a list takes value from[i] of the list as it was. A single value is the same for
+    // every slot; a list of another length cannot be told apart per slot and stays as it is.
     const auto reorder = [&config](const std::string &key, const std::vector<size_t> &from) {
         auto *values = dynamic_cast<ConfigOptionVectorBase *>(config.option(key));
-        if (values == nullptr || values->size() != from.size())
+        if (values == nullptr || values->size() != from.size()) {
+            if (values != nullptr && values->size() > 1)
+                BOOST_LOG_TRIVIAL(warning) << "reorder_filament_slots: " << key << " has " << values->size() << " values for "
+                                           << from.size() << ", left in the old slot order";
             return;
+        }
         const std::unique_ptr<ConfigOption> old_values(values->clone());
         for (size_t i = 0; i < from.size(); ++i)
             values->set_at(old_values.get(), i, from[i]);
@@ -11446,10 +11451,13 @@ void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t
                 new_self_index.push_back(static_cast<int>(slot) + 1);
             }
         // An index naming a filament outside the slots cannot be laid out again.
-        if (variant_from.size() == self_index->size())
+        if (variant_from.size() == self_index->size()) {
             self_index->values = std::move(new_self_index);
-        else
+        } else {
+            BOOST_LOG_TRIVIAL(warning) << "reorder_filament_slots: filament_self_index " << self_index->serialize() << " does not name "
+                                       << n << " filaments, the variant lists are left in the old slot order";
             variant_from.clear();
+        }
     }
     for (const std::string &key : config.keys()) {
         const ConfigCardinality cardinality = cardinality_of(key);
@@ -11486,11 +11494,28 @@ void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t
     std::vector<int> new_id(n);
     for (size_t slot = 0; slot < n; ++slot)
         new_id[order[slot]] = static_cast<int>(slot) + 1;
+    const auto renumber = [&new_id, n](int &filament) {
+        if (filament >= 1 && size_t(filament) <= n)
+            filament = new_id[filament - 1];
+    };
     for (const char *key : { "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id", "internal_solid_filament_id",
                              "top_surface_filament_id", "bottom_surface_filament_id", "support_filament", "support_interface_filament",
                              "wipe_tower_filament" })
-        if (auto *filament = config.option<ConfigOptionInt>(key); filament != nullptr && filament->value >= 1 && size_t(filament->value) <= n)
-            filament->value = new_id[filament->value - 1];
+        if (auto *filament = config.option<ConfigOptionInt>(key))
+            renumber(filament->value);
+    // A plate's print sequences: the first layer's lists filaments, each group of the other layers'
+    // holds a layer range and then filaments.
+    if (auto *sequence = config.option<ConfigOptionInts>("first_layer_print_sequence"))
+        for (int &filament : sequence->values)
+            renumber(filament);
+    const auto *groups   = config.option<ConfigOptionInt>("other_layers_print_sequence_nums");
+    auto       *sequence = config.option<ConfigOptionInts>("other_layers_print_sequence");
+    if (groups != nullptr && sequence != nullptr && groups->value > 0 && sequence->size() % size_t(groups->value) == 0) {
+        const size_t group_size = sequence->size() / size_t(groups->value);
+        for (size_t i = 0; i < sequence->size(); ++i)
+            if (i % group_size >= 2)
+                renumber(sequence->values[i]);
+    }
     if (auto *components = config.option<ConfigOptionStrings>("filament_mixed_components"))
         for (std::string &mix : components->values) {
             std::vector<unsigned int> ids     = parse_mixed_components(mix);

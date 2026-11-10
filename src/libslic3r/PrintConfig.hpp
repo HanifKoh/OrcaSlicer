@@ -1053,8 +1053,10 @@ void insert_plate_filament_slot(DynamicPrintConfig &plate_config, size_t pos, in
 // order naming every slot once. Each per-filament value moves with its slot - the per-filament options,
 // the variant-expanded ones by filament_self_index, the preset names, ids and conditions, the preset
 // columns (the process, one per filament, the printer) and the flush matrix and vector - and the
-// options naming a filament by its 1-based id, the mixed components and the feature filaments, follow
-// it. A list whose length does not fit the slot count is left as it is.
+// options naming a filament by its 1-based id, the mixed components, the feature filaments and a
+// plate's print sequences, follow it. A list whose length does not fit the slot count is left as it is
+// and logged. The filament_dev_* lists hold runs of their own length per filament: the caller lays
+// them out again from the filament configs with set_filament_dev_options.
 void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t> &order);
 
 extern void update_static_print_config_from_dynamic(ConfigBase& config, const DynamicPrintConfig& dest_config, std::vector<int> variant_index, std::set<std::string>& key_set1, int stride = 1);

@@ -930,3 +930,20 @@ TEST_CASE("Moving the slots re-points every reference the model makes to them", 
         CHECK(gcodes[0].extruder == 1);
     }
 }
+
+TEST_CASE("Reordering the filament slots renumbers a plate's print sequences", "[Preset][Bundle][FilamentSlots]")
+{
+    // A plate of four slots whose third is the mix: the first layer's order lists filaments, each group
+    // of the other layers' holds a layer range and then filaments.
+    DynamicPrintConfig plate;
+    plate.set_key_value("filament_map", new ConfigOptionInts{ 1, 2, 1, 2 });
+    plate.set_key_value("first_layer_print_sequence", new ConfigOptionInts{ 3, 1, 2, 4 });
+    plate.set_key_value("other_layers_print_sequence", new ConfigOptionInts{ 2, 5, 3, 1, 2, 4, 6, 9, 4, 3, 2, 1 });
+    plate.set_key_value("other_layers_print_sequence_nums", new ConfigOptionInt(2));
+
+    reorder_filament_slots(plate, { 0, 1, 3, 2 });
+    CHECK(plate.option<ConfigOptionInts>("filament_map")->values == std::vector<int>{ 1, 2, 2, 1 });
+    CHECK(plate.option<ConfigOptionInts>("first_layer_print_sequence")->values == std::vector<int>{ 4, 1, 2, 3 });
+    // The layer ranges stay; the filaments follow their slots.
+    CHECK(plate.option<ConfigOptionInts>("other_layers_print_sequence")->values == std::vector<int>{ 2, 5, 4, 1, 2, 3, 6, 9, 3, 4, 2, 1 });
+}

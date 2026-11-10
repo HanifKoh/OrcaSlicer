@@ -230,10 +230,12 @@ The CLI assembles the config in load order first, with the extra filaments at th
 and then moves the mixed slots behind them with `reorder_filament_slots`: every
 per-filament list moves with its slot (the variant-expanded ones by
 `filament_self_index`, the preset columns, the flush matrix and vector), and the mixed
-components and feature filament ids follow the filaments they name. The command line
-options, the plates' own maps and the model (`remap_model_filament_slots`) move the
-same way. The extra filaments therefore print with the tool numbers of the slots ahead
-of the mixes.
+components, the feature filament ids and a plate's print sequences follow the filaments
+they name. A list it cannot lay out is left in place and logged. The `filament_dev_*`
+lists hold a run of their own length per filament, so the CLI lays them out again from
+the filament configs in the new order. The command line options, the plates' own maps
+and print sequences and the model (`remap_model_filament_slots`) move the same way. The
+extra filaments therefore print with the tool numbers of the slots ahead of the mixes.
 
 ## Tests
 
@@ -253,8 +255,9 @@ of the mixes.
   that slot; the physical count grows and shrinks with the mixed tail last and the
   model following; an imported object naming a mixed slot gets a filament of its own; a
   shrink across the mixed tail is refused; a plate's maps take an inserted slot at its
-  position; the CLI's reorder moves every per-filament value and renumbers the
-  references.
+  position; moving or removing a slot re-points every reference the model makes to it;
+  the CLI's reorder moves every per-filament value and renumbers the references and a
+  plate's print sequences.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
@@ -264,5 +267,7 @@ of the mixes.
   colour per filament with the matrix pairs it had; a one-filament project given two
   filaments slices with two.
 - `cli_mixed_overload` (`tests/cli/test_cli_mixed_overload.sh`): a project of two
-  filaments and a mix, with the cube on the mix, given a fourth filament exports the
-  extra filament in the third slot and the mix, with the cube on it, in the fourth.
+  filaments and a mix, naming the mix by the cube's extruder, object and part feature
+  filaments, a height range and the plate's first-layer order, given a fourth filament
+  exports the extra filament in the third slot and the mix in the fourth with every
+  reference on it, and the per-filament lists of the same layout loaded directly.
