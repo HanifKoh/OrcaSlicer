@@ -1,0 +1,45 @@
+name: Check per-N resizes
+
+# Reports added C++ lines that size a per-filament or per-extruder config array outside the
+# cardinality layer and PresetBundle's slot functions (scripts/check_per_n_resizes.py,
+# docs/HLSD/filament-slots.md). The findings are heuristic, so they are warning annotations
+# on the changed lines and never fail the run; a deliberate exception goes in
+# scripts/per_n_resize_allowlist.txt.
+on:
+  pull_request:
+    branches:
+      - main
+      - release/*
+    paths:
+      - 'src/**'
+      - 'scripts/check_per_n_resizes.py'
+      - 'scripts/per_n_resize_allowlist.txt'
+      - 'scripts/tests/test_check_per_n_resizes.py'
+      - '.github/workflows/check_per_n_resizes.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check_per_n_resizes:
+    name: Check per-N resizes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: 'false'
+          # The PR merge commit plus its first parent, the base it is diffed against.
+          fetch-depth: 2
+
+      # Not warning-only: if the checker itself is broken, its silence means nothing.
+      - name: Run the checker's own unit tests
+        run: python3 -m unittest scripts/tests/test_check_per_n_resizes.py
+
+      - name: Look for hand-rolled per-N resizes
+        run: python3 scripts/check_per_n_resizes.py HEAD^1 --head HEAD --github --warn-only
