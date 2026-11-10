@@ -4815,7 +4815,6 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
     ConfigOptionStrings *filament_color = project_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *filament_color_type = project_config.option<ConfigOptionStrings>("filament_colour_type");
     ConfigOptionInts *   filament_map = project_config.option<ConfigOptionInts>("filament_map");
-    ConfigOptionInts *   filament_volume_map = project_config.option<ConfigOptionInts>("filament_volume_map");
     // Snapshot and temporarily strip mixed filament slots so AMS sync operates on physical
     // filaments only. A mixed slot is virtual and has no tray to sync against; leaving it in
     // would let AMS mapping overwrite it and would break the physical-first slot ordering the
@@ -5063,8 +5062,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         filament_color_type->values = exist_color_types;
         ams_multi_color_filment = exist_multi_color_filment;
         this->filament_presets = exist_filament_presets;
-        filament_map->values.resize(exist_filament_presets.size(), 1);
-        filament_volume_map->values.resize(exist_filament_presets.size(), static_cast<int>(NozzleVolumeType::nvtStandard));
+        // The other slot arrays follow the synced slots; a slot that was there keeps its values.
+        resize_filament_slot_arrays(this->filament_presets.size(), std::string());
     }
     else {//overwrite;
         bool has_placeholders = std::any_of(ams_infos.begin(), ams_infos.end(),
@@ -5122,8 +5121,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color_type->values = result_color_types;
             this->filament_presets      = result_presets;
             ams_multi_color_filment     = result_multi_colors;
-            filament_map->values.resize(total, 1);
-            filament_volume_map->values.resize(total, static_cast<int>(NozzleVolumeType::nvtStandard));
+            resize_filament_slot_arrays(this->filament_presets.size(), std::string());
         } else {
             // BBL: existing wholesale replace
             filament_color->values = ams_filament_colors;
@@ -5133,8 +5131,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             for (size_t i = 0; i < std::min(ams_filament_presets.size(), this->filament_presets.size()); i++)
                 ams_filament_presets[i] = synced_preset_name(this->filament_presets[i], ams_filament_presets[i]);
             this->filament_presets = ams_filament_presets;
-            filament_map->values.resize(ams_filament_colors.size(), 1);
-            filament_volume_map->values.resize(ams_filament_colors.size(), static_cast<int>(NozzleVolumeType::nvtStandard));
+            resize_filament_slot_arrays(this->filament_presets.size(), std::string());
         }
 
         auto& print_config = this->prints.get_edited_preset().config;
@@ -5174,6 +5171,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         }
     }
 
+    // The mixed slots put back above carry no volume or nozzle map: seed them.
+    resize_filament_slot_arrays(num_filament_slots(), std::string());
     // Update ams_multi_color_filment
     update_filament_multi_color();
     update_multi_material_filament_presets();
