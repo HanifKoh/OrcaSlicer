@@ -91,8 +91,9 @@ hold one value per slot whether or not the top-up then adds a slot:
 - A selection restored from the app config (`load_selections`, `update_selections`)
   is sized to its preset list: the colour packs come back at the length they were
   saved with, and the nozzle maps are not saved and start on their defaults.
-- The AMS sync sizes the arrays to the synced physical slots, and again after it puts
-  the mixed tail back.
+- The AMS sync sets the mixed tail aside, sizes the arrays to the synced physical
+  slots, and puts the tail back behind them; a mixed slot keeps its volume and nozzle
+  maps and its mix settings.
 
 A writer that sets one slot's value (the sidebar's colour picker, a combo's AMS colour,
 the global nozzle maps) writes into the slots the arrays hold and never resizes them.

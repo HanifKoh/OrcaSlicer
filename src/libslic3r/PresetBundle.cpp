@@ -4815,6 +4815,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
     ConfigOptionStrings *filament_color = project_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *filament_color_type = project_config.option<ConfigOptionStrings>("filament_colour_type");
     ConfigOptionInts *   filament_map = project_config.option<ConfigOptionInts>("filament_map");
+    ConfigOptionInts *   filament_volume_map = project_config.option<ConfigOptionInts>("filament_volume_map");
+    ConfigOptionInts *   filament_nozzle_map = project_config.option<ConfigOptionInts>("filament_nozzle_map");
     // Snapshot and temporarily strip mixed filament slots so AMS sync operates on physical
     // filaments only. A mixed slot is virtual and has no tray to sync against; leaving it in
     // would let AMS mapping overwrite it and would break the physical-first slot ordering the
@@ -4823,6 +4825,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         std::string preset;
         std::string color;
         std::string color_type;
+        int         volume_map = static_cast<int>(NozzleVolumeType::nvtStandard);
+        int         nozzle_map = 0;
         std::string mixed_components;
         std::string mixed_sublayer_ratios;
         bool        mixed_gradient = false;
@@ -4846,6 +4850,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             snap.preset     = this->filament_presets[i];
             snap.color      = (i < filament_color->values.size())      ? filament_color->values[i]      : "";
             snap.color_type = (i < filament_color_type->values.size()) ? filament_color_type->values[i] : "";
+            if (i < filament_volume_map->values.size()) snap.volume_map = filament_volume_map->values[i];
+            if (i < filament_nozzle_map->values.size()) snap.nozzle_map = filament_nozzle_map->values[i];
             if (mixed_comp_opt     && i < mixed_comp_opt->values.size())     snap.mixed_components      = mixed_comp_opt->values[i];
             if (mixed_ratios_opt   && i < mixed_ratios_opt->values.size())   snap.mixed_sublayer_ratios = mixed_ratios_opt->values[i];
             if (mixed_gradient_opt && i < mixed_gradient_opt->values.size()) snap.mixed_gradient        = mixed_gradient_opt->values[i];
@@ -4861,6 +4867,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color->values.resize(phys_count);
             filament_color_type->values.resize(phys_count);
             filament_map->values.resize(phys_count, 1);
+            filament_volume_map->values.resize(phys_count, static_cast<int>(NozzleVolumeType::nvtStandard));
+            filament_nozzle_map->values.resize(phys_count, 0);
             is_mixed_opt->values.resize(phys_count);
             if (mixed_comp_opt)       mixed_comp_opt->values.resize(phys_count);
             if (mixed_ratios_opt)     mixed_ratios_opt->values.resize(phys_count);
@@ -5161,6 +5169,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color_type->values.push_back(snap.color_type);
             ams_multi_color_filment.push_back({snap.color});
             filament_map->values.push_back(1);
+            filament_volume_map->values.push_back(snap.volume_map);
+            filament_nozzle_map->values.push_back(snap.nozzle_map);
             if (is_mixed_opt)         is_mixed_opt->values.push_back((unsigned char)true);
             if (mixed_comp_opt)       mixed_comp_opt->values.push_back(snap.mixed_components);
             if (mixed_ratios_opt)     mixed_ratios_opt->values.push_back(snap.mixed_sublayer_ratios);
@@ -5171,8 +5181,6 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         }
     }
 
-    // The mixed slots put back above carry no volume or nozzle map: seed them.
-    resize_filament_slot_arrays(num_filament_slots(), std::string());
     // Update ams_multi_color_filment
     update_filament_multi_color();
     update_multi_material_filament_presets();

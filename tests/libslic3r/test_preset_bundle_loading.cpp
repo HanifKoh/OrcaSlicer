@@ -5883,7 +5883,8 @@ TEST_CASE("An unnamed spool between loaded AMS slots keeps the project filament 
 
 // An AMS sync rewrites the physical slots from the trays and keeps the mixed tail behind them. Every
 // slot array, the nozzle maps included, ends with one value per slot whether the sync keeps the
-// physical count or adds a slot, and the physical slots that were there keep their nozzle maps.
+// physical count or adds a slot. The physical slots that were there keep their nozzle maps, a slot
+// the sync adds starts on the defaults, and the mix keeps its volume and nozzle maps.
 TEST_CASE("An AMS sync keeps every slot array in step with the slots", "[Preset][Bundle][AMS][FilamentSlots]")
 {
     PresetBundle bundle;
@@ -5933,6 +5934,14 @@ TEST_CASE("An AMS sync keeps every slot array in step with the slots", "[Preset]
         CHECK(ints("filament_map")[1] == 2);
         CHECK(ints("filament_nozzle_map")[1] == 6);
         CHECK(ints("filament_volume_map")[1] == 1);
+        // A physical slot the sync adds starts on the default maps; the mix keeps its own.
+        for (size_t slot = 2; slot + 1 < slots; ++slot) {
+            CAPTURE(slot);
+            CHECK(ints("filament_nozzle_map").at(slot) == 0);
+            CHECK(ints("filament_volume_map").at(slot) == static_cast<int>(NozzleVolumeType::nvtStandard));
+        }
+        CHECK(ints("filament_nozzle_map").back() == 7);
+        CHECK(ints("filament_volume_map").back() == 1);
     };
 
     SECTION("overwriting the project with as many trays as physical slots") {
