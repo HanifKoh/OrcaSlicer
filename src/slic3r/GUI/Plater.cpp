@@ -8504,7 +8504,7 @@ void Plater::sync_filament_slots_from_bundle(size_t slots_before)
             get_partplate_list().on_filament_deleted(static_cast<int>(--slots_left), it->first);
     Slic3r::remap_model_filament_slots(model(), moved);
     const size_t slots = bundle->num_filament_slots();
-    const size_t added = slots - slots_left;
+    const size_t added = slots > slots_left ? slots - slots_left : 0;
     if (added == 0 && slots_left == slots_before)
         return;
     // The same steps Sidebar::add_custom_filament takes for one slot, for each slot the bundle
