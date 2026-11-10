@@ -79,10 +79,23 @@ tests and debugging.
 
 Three operations change the slot count. Growth goes through one private resize,
 `resize_filament_slot_arrays`, that walks `filament_slot_keys()` and seeds every new
-entry; removal walks the same list and erases one entry from each array. The project
-loader pads the seven mixed-colour arrays of an older project (`filament_is_mixed` and
-the six `filament_mixed_*`) with
-`resize_mixed_filament_metadata` before the selections size the rest.
+entry; removal walks the same list and erases one entry from each array.
+
+The writers that replace the whole slot list end with the same resize, so the arrays
+hold one value per slot whether or not the top-up then adds a slot:
+
+- The project loader pads the seven mixed-colour arrays of an older project
+  (`filament_is_mixed` and the six `filament_mixed_*`) with
+  `resize_mixed_filament_metadata`, then sizes the other arrays to the file's
+  filament count: a file writes each array at its own length.
+- A selection restored from the app config (`load_selections`, `update_selections`)
+  is sized to its preset list: the colour packs come back at the length they were
+  saved with, and the nozzle maps are not saved and start on their defaults.
+- The AMS sync sizes the arrays to the synced physical slots, and again after it puts
+  the mixed tail back.
+
+A writer that sets one slot's value (the sidebar's colour picker, a combo's AMS colour,
+the global nozzle maps) writes into the slots the arrays hold and never resizes them.
 
 - `set_num_filaments(n, colour)` grows or shrinks at the raw tail. It is the right
   call for a mixed slot (which belongs at the tail) and for plain growth without a
@@ -165,6 +178,8 @@ project.
   resize keeps the pairs and nozzles the old layout had.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
+- `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
+  sync hold one value per slot in every array without the top-up adding a slot.
 - `cli_short_palette` (`tests/cli/test_cli_short_palette.sh`): a two-filament project
   carrying one colour and a three-filament matrix slices on the CLI and exports one
   colour per filament with the matrix pairs it had; a one-filament project given two
