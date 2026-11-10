@@ -749,3 +749,29 @@ TEST_CASE("set_num_filaments refuses to cut across the mixed tail", "[Preset][Bu
         CHECK(bundle.filament_slots_consistent());
     }
 }
+
+TEST_CASE("A plate's filament maps take an inserted slot's defaults at its position", "[Preset][Bundle][FilamentSlots]")
+{
+    DynamicPrintConfig plate;
+    plate.set_key_value("filament_map", new ConfigOptionInts{ 2, 2, 2 });
+    plate.set_key_value("filament_nozzle_map", new ConfigOptionInts{ 1, 1, 1 });
+    plate.set_key_value("filament_volume_map", new ConfigOptionInts{ 1, 1, 1 });
+    const auto ints = [&plate](const char *key) { return plate.option<ConfigOptionInts>(key)->values; };
+
+    // A physical slot inserted ahead of a mixed tail of one: the mix keeps its values behind it.
+    insert_plate_filament_slot(plate, 2, 0);
+    CHECK(ints("filament_map") == std::vector<int>{ 2, 2, 1, 2 });
+    CHECK(ints("filament_nozzle_map") == std::vector<int>{ 1, 1, 0, 1 });
+    CHECK(ints("filament_volume_map") == std::vector<int>{ 1, 1, 0, 1 });
+
+    SECTION("a map shorter than the position takes it at its end") {
+        insert_plate_filament_slot(plate, 9, 0);
+        CHECK(ints("filament_map") == std::vector<int>{ 2, 2, 1, 2, 1 });
+    }
+    SECTION("a map the plate does not have stays absent") {
+        plate.erase("filament_nozzle_map");
+        insert_plate_filament_slot(plate, 0, 0);
+        CHECK_FALSE(plate.has("filament_nozzle_map"));
+        CHECK(ints("filament_map").front() == 1);
+    }
+}

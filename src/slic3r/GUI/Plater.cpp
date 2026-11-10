@@ -5139,7 +5139,7 @@ static bool create_mixed_filament_from_result(
         presets[new_idx] = presets[result.components[0] - 1];
 
     size_t filament_count = wxGetApp().preset_bundle->filament_presets.size();
-    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count);
+    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count, new_idx);
     wxGetApp().plater()->on_filament_count_change(filament_count);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
@@ -5988,7 +5988,7 @@ void Sidebar::add_custom_filament(wxColour new_col, const std::string& preset_na
         wxGetApp().preset_bundle->filament_presets[insert_pos] = preset_name;
     }
 
-    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count);
+    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count, insert_pos);
     wxGetApp().plater()->on_filament_count_change(filament_count);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
@@ -8495,21 +8495,28 @@ void Plater::apply_pending_filament_slot_relocations()
 
 void Plater::sync_filament_slots_from_bundle(size_t slots_before)
 {
-    apply_pending_filament_slot_relocations();
-    auto        *bundle = wxGetApp().preset_bundle;
-    const size_t slots  = bundle->num_filament_slots();
-    if (slots <= slots_before)
+    auto *bundle = wxGetApp().preset_bundle;
+    const std::map<int, int> moved = bundle->take_pending_slot_relocations();
+    // Slots the bundle removed leave the plates' maps first, from the back, in the old numbering.
+    size_t slots_left = slots_before;
+    for (auto it = moved.rbegin(); it != moved.rend(); ++it)
+        if (it->second < 0)
+            get_partplate_list().on_filament_deleted(static_cast<int>(--slots_left), it->first);
+    Slic3r::remap_model_filament_slots(model(), moved);
+    const size_t slots = bundle->num_filament_slots();
+    const size_t added = slots - slots_left;
+    if (added == 0 && slots_left == slots_before)
         return;
     // The same steps Sidebar::add_custom_filament takes for one slot, for each slot the bundle
     // added: the new physical slots sit just ahead of the mixed tail.
-    for (size_t slot = slots_before; slot < slots; ++slot)
-        get_partplate_list().on_filament_added(static_cast<int>(slot + 1));
+    const size_t first_new = bundle->num_physical_filaments() - added;
+    for (size_t i = 0; i < added; ++i)
+        get_partplate_list().on_filament_added(static_cast<int>(slots_left + i + 1), first_new + i);
     on_filament_count_change(slots);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     bundle->export_selections(*wxGetApp().app_config);
-    const size_t first_new = bundle->num_physical_filaments() - (slots - slots_before);
-    for (size_t slot = first_new; slot < bundle->num_physical_filaments(); ++slot)
-        sidebar().auto_calc_flushing_volumes(static_cast<int>(slot));
+    for (size_t i = 0; i < added; ++i)
+        sidebar().auto_calc_flushing_volumes(static_cast<int>(first_new + i));
 }
 
 wxString Plater::get_slice_warning_string(GCodeProcessorResult::SliceWarning& warning)

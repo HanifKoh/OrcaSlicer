@@ -11402,6 +11402,17 @@ void resize_flush_volumes_matrix(DynamicPrintConfig &config, size_t num_filament
     config.option<ConfigOptionFloats>("flush_volumes_matrix", true)->values = new_matrix;
 }
 
+void insert_plate_filament_slot(DynamicPrintConfig &plate_config, size_t pos, int volume_type)
+{
+    const auto insert = [&plate_config, pos](const char *key, int value) {
+        if (auto *map = plate_config.option<ConfigOptionInts>(key))
+            map->values.insert(map->values.begin() + std::min(pos, map->values.size()), value);
+    };
+    insert("filament_map", 1);
+    insert("filament_nozzle_map", 0);
+    insert("filament_volume_map", volume_type);
+}
+
 
 //used for object/region config
 //use the smallest of multiple to single
