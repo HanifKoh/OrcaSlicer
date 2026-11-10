@@ -1964,12 +1964,14 @@ bool model_has_multi_part_objects(const Model &model);
 // If the model has advanced features, then it cannot be processed in simple mode.
 bool model_has_advanced_features(const Model &model);
 
-// Remap the model's filament-slot references after a published-3MF import relocated
-// mixed-filament definitions onto new slot numbers: object/volume "extruder" configs and
-// multi-material color-painting states (paint state stores the one-based slot number).
-// slot_relocations maps the author's zero-based slot number to its final zero-based slot;
-// entries are applied simultaneously (no chained lookups), untouched slots keep everything.
-// A negative final slot marks a removed slot, whose references go to the first slot.
+// Remap the model's filament-slot references after slots moved (a published-3MF import relocating
+// mixed-filament definitions, a filament inserted ahead of the mixed tail): the "extruder" and the
+// feature and support filament options of objects, volumes and height ranges, multi-material
+// color-painting states (paint state stores the one-based slot number) and the plates' tool changes.
+// slot_relocations maps the old zero-based slot number to its final zero-based slot; entries are
+// applied simultaneously (no chained lookups), untouched slots keep everything. A negative final
+// slot marks a removed slot, handled as a delete without a replacement: objects and volumes on it
+// go to the first filament, its paint is cleared, and its other options and tool changes are dropped.
 void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations);
 
 #ifndef NDEBUG

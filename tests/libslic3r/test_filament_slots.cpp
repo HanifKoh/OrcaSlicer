@@ -10,11 +10,13 @@
 
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/CustomGCode.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PrintConfigCardinality.hpp"
+#include "libslic3r/Slicing.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/TriangleSelector.hpp"
 
@@ -705,10 +707,9 @@ TEST_CASE("Shrinking the physical filaments removes the last ones and moves the 
     CHECK(on_mix->volumes.front()->config.extruder() == 3);
     CHECK(painted_with(on_mix, 4));
     CHECK_FALSE(painted_with(on_mix, 6));
-    // A removed filament's objects go to the first one.
+    // A removed filament's objects go to the first one and its paint is cleared, as a delete does.
     CHECK(on_removed->volumes.front()->config.extruder() == 1);
-    CHECK(painted_with(on_removed, 1));
-    CHECK_FALSE(painted_with(on_removed, 3));
+    CHECK(on_removed->volumes.front()->mmu_segmentation_facets.empty());
 
     SECTION("but not below one filament") {
         bundle.set_num_physical_filaments(0);
@@ -878,5 +879,54 @@ TEST_CASE("Reordering the filament slots moves every per-filament value and renu
         config.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000", "#00FF00" });
         reorder_filament_slots(config, { 0, 1, 3, 2 });
         CHECK(config.option<ConfigOptionStrings>("filament_colour")->values == std::vector<std::string>{ "#FF0000", "#00FF00" });
+    }
+}
+
+TEST_CASE("Moving the slots re-points every reference the model makes to them", "[Preset][Bundle][FilamentSlots]")
+{
+    // An object naming slot 3 (a mix, say) every way a model can, and slot 2 as a control.
+    Model        model;
+    ModelObject *object = add_object_on(model, 3, 3);
+    ModelVolume *volume = object->volumes.front();
+    object->config.set("extruder", 3);
+    object->config.set("sparse_infill_filament_id", 3);
+    object->config.set("support_filament", 3);
+    object->config.set("support_interface_filament", 2);
+    volume->config.set("inner_wall_filament_id", 3);
+    ModelConfig &range = object->layer_config_ranges[t_layer_height_range(2., 4.)];
+    range.set("extruder", 3);
+    range.set("top_surface_filament_id", 3);
+    std::vector<CustomGCode::Item> &gcodes = model.plates_custom_gcodes[0].gcodes;
+    gcodes.push_back({ 1., CustomGCode::ToolChange, 3, "", "" });
+    gcodes.push_back({ 2., CustomGCode::ToolChange, 1, "", "" });
+
+    SECTION("a moved slot is followed everywhere") {
+        remap_model_filament_slots(model, { { 2, 3 } });
+        CHECK(object->config.extruder() == 4);
+        CHECK(object->config.opt_int("sparse_infill_filament_id") == 4);
+        CHECK(object->config.opt_int("support_filament") == 4);
+        CHECK(object->config.opt_int("support_interface_filament") == 2);
+        CHECK(volume->config.extruder() == 4);
+        CHECK(volume->config.opt_int("inner_wall_filament_id") == 4);
+        CHECK(painted_with(object, 4));
+        CHECK(range.extruder() == 4);
+        CHECK(range.opt_int("top_surface_filament_id") == 4);
+        REQUIRE(gcodes.size() == 2);
+        CHECK(gcodes[0].extruder == 4);
+        CHECK(gcodes[1].extruder == 1);
+    }
+    SECTION("a removed slot is dropped as a delete without a replacement drops it") {
+        remap_model_filament_slots(model, { { 2, -1 } });
+        CHECK(object->config.extruder() == 1);
+        CHECK(volume->config.extruder() == 1);
+        CHECK_FALSE(object->config.has("sparse_infill_filament_id"));
+        CHECK_FALSE(object->config.has("support_filament"));
+        CHECK(object->config.opt_int("support_interface_filament") == 2);
+        CHECK_FALSE(volume->config.has("inner_wall_filament_id"));
+        CHECK(volume->mmu_segmentation_facets.empty());
+        CHECK_FALSE(range.has("extruder"));
+        CHECK_FALSE(range.has("top_surface_filament_id"));
+        REQUIRE(gcodes.size() == 1);
+        CHECK(gcodes[0].extruder == 1);
     }
 }

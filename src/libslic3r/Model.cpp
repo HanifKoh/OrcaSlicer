@@ -4437,35 +4437,67 @@ void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_rel
     if (slot_relocations.empty())
         return;
 
-    // Paint states and the object/volume "extruder" configs store one-based slot numbers
-    // (see Sidebar::on_action_add_filament's insertion remap for the same encoding).
+    // Paint states, configs and tool changes store one-based slot numbers; 0 marks a removed slot.
     std::map<int, int> one_based_slots;
     for (const auto &[from, to] : slot_relocations)
-        one_based_slots.emplace(from + 1, std::max(to, 0) + 1);
+        one_based_slots.emplace(from + 1, std::max(to, -1) + 1);
 
+    // A removed slot's paint is cleared, as a delete without a replacement clears it.
     EnforcerBlockerStateMap paint_state_map;
     for (size_t state = 0; state < paint_state_map.size(); ++state)
         paint_state_map[state] = EnforcerBlockerType(state);
     for (const auto &[one_based_from, one_based_to] : one_based_slots) {
-        assert(one_based_from >= 0 && size_t(one_based_from) < paint_state_map.size());
-        assert(one_based_to > 0 && size_t(one_based_to) < paint_state_map.size());
+        assert(one_based_from > 0 && size_t(one_based_from) < paint_state_map.size());
+        assert(one_based_to >= 0 && size_t(one_based_to) < paint_state_map.size());
         paint_state_map[size_t(one_based_from)] = EnforcerBlockerType(one_based_to);
     }
 
-    auto remap_extruder_config = [&one_based_slots](ModelConfig &config) -> bool {
-        const auto it = config.has("extruder") ? one_based_slots.find(config.extruder()) : one_based_slots.end();
-        if (it == one_based_slots.end())
-            return false;
-        config.set("extruder", it->second);
-        return true;
+    // Every option an object, a part or a height range names a filament slot with. An object or a
+    // part on a removed slot goes to the first filament, as a delete does; any other option naming
+    // it is dropped, so the object falls back to the filament it would use without it.
+    static const char *const slot_keys[] = { "extruder",
+                                             "outer_wall_filament_id",
+                                             "inner_wall_filament_id",
+                                             "sparse_infill_filament_id",
+                                             "internal_solid_filament_id",
+                                             "top_surface_filament_id",
+                                             "bottom_surface_filament_id",
+                                             "support_filament",
+                                             "support_interface_filament" };
+    auto remap_config = [&one_based_slots](ModelConfig &config, bool part) {
+        for (const char *key : slot_keys) {
+            const auto it = config.has(key) ? one_based_slots.find(config.opt_int(key)) : one_based_slots.end();
+            if (it == one_based_slots.end())
+                continue;
+            if (it->second > 0)
+                config.set(key, it->second);
+            else if (part && std::string(key) == "extruder")
+                config.set(key, 1);
+            else
+                config.erase(key);
+        }
     };
 
     for (ModelObject *object : model.objects) {
-        remap_extruder_config(object->config);
+        remap_config(object->config, true);
         for (ModelVolume *volume : object->volumes) {
-            remap_extruder_config(volume->config);
+            remap_config(volume->config, true);
             volume->mmu_segmentation_facets.remap_states(*volume, paint_state_map);
         }
+        for (auto &[range, config] : object->layer_config_ranges)
+            remap_config(config, false);
+    }
+
+    // A tool change to a removed slot goes, as a delete without a replacement drops it.
+    for (auto &[plate, info] : model.plates_custom_gcodes) {
+        std::vector<CustomGCode::Item> &gcodes = info.gcodes;
+        for (CustomGCode::Item &item : gcodes)
+            if (item.type == CustomGCode::Type::ToolChange)
+                if (const auto it = one_based_slots.find(item.extruder); it != one_based_slots.end())
+                    item.extruder = it->second;
+        gcodes.erase(std::remove_if(gcodes.begin(), gcodes.end(),
+                                    [](const CustomGCode::Item &item) { return item.type == CustomGCode::Type::ToolChange && item.extruder == 0; }),
+                     gcodes.end());
     }
 }
 

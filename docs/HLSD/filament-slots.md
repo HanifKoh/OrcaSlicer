@@ -169,9 +169,12 @@ every path, not only when the extruder count happened to change.
 When a mixed tail exists, the insertion moves the mixed slots up, and the model's
 extruder ids and paint states must follow. The bundle has no model, so it records the
 moves (`take_pending_slot_relocations()`, old to new index, -1 for a slot
-`set_num_physical_filaments` removed), and the owner of the model applies them
-(`remap_model_filament_slots` sends a removed slot's objects and paint to the first
-filament, as a delete without a replacement does):
+`set_num_physical_filaments` removed), and the owner of the model applies them with
+`remap_model_filament_slots`. That follows every reference a model makes to a slot: the
+`extruder` and the feature and support filament options of objects, parts and height
+ranges, the painted facets and the plates' tool changes. A removed slot is handled as a
+delete without a replacement: objects and parts on it go to the first filament, its paint
+is cleared, and its other options and tool changes are dropped. The owners are:
 `Plater::load_files` for a freshly parsed project, right after the published-3MF
 relocations; for the live model `GUI_App::load_current_presets`, the user-preset loads
 and the removal of a preset bundle, the plugin host's local bundle reload, the preset
