@@ -22382,17 +22382,19 @@ void Plater::set_global_filament_map_mode(FilamentMapMode mode)
     mode_ptr->value = mode;
 }
 
+// The global maps hold one value per filament slot: a map given to them sets the slots it covers and
+// never changes the slot count.
 void Plater::set_global_filament_map(const std::vector<int>& filament_map)
 {
-    auto& project_config = wxGetApp().preset_bundle->project_config;
-    project_config.option<ConfigOptionInts>("filament_map")->values = filament_map;
+    auto& slots = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_map")->values;
+    std::copy_n(filament_map.begin(), std::min(filament_map.size(), slots.size()), slots.begin());
     p->partplate_list.invalidate_exclusion_volume_previews();
 }
 
 void Plater::set_global_filament_volume_map(const std::vector<int>& filament_volume_map)
 {
-    auto& project_config = wxGetApp().preset_bundle->project_config;
-    project_config.option<ConfigOptionInts>("filament_volume_map")->values = filament_volume_map;
+    auto& slots = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map")->values;
+    std::copy_n(filament_volume_map.begin(), std::min(filament_volume_map.size(), slots.size()), slots.begin());
 }
 
 std::vector<int> Plater::get_global_filament_map() const

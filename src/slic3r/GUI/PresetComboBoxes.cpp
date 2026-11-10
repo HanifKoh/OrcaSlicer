@@ -104,6 +104,17 @@ static FilamentColorPickerValue filament_color_picker_value(const DynamicPrintCo
     return value;
 }
 
+// The colour arrays hold one value per filament slot. A combo past them has no slot to colour, and
+// writing one would grow the arrays past the slot list.
+static bool colour_arrays_hold_slot(const DynamicPrintConfig& config, int index)
+{
+    const auto holds = [&config, index](const char* key) {
+        const auto* colours = config.opt<ConfigOptionStrings>(key);
+        return colours != nullptr && index >= 0 && static_cast<std::size_t>(index) < colours->values.size();
+    };
+    return holds("filament_colour") && holds("filament_multi_colour") && holds("filament_colour_type");
+}
+
 
 #define BORDER_W 10
 
@@ -310,14 +321,13 @@ int PresetComboBox::update_ams_color()
         colors = iter->second.opt<ConfigOptionStrings>("filament_multi_colour")->values;
     }
     DynamicPrintConfig *cfg        = &wxGetApp().preset_bundle->project_config;
+    if (!colour_arrays_hold_slot(*cfg, m_filament_idx)) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": filament %1% lies past the colour arrays") % m_filament_idx;
+        return -1;
+    }
     auto color_head = static_cast<ConfigOptionStrings*>(cfg->option("filament_colour")->clone()); // single color (the first color if multi-color filament)
     auto color_pack = static_cast<ConfigOptionStrings *>(cfg->option("filament_multi_colour")->clone()); // multi color (all colors in all kinds of filament)
     auto color_type = static_cast<ConfigOptionStrings*>(cfg->option("filament_colour_type")->clone()); // color type
-
-    // The slot can lie past the colour arrays (see sync_colour_config()).
-    if (m_filament_idx >= color_head->values.size()) color_head->values.resize(m_filament_idx + 1);
-    if (m_filament_idx >= color_pack->values.size()) color_pack->values.resize(m_filament_idx + 1);
-    if (m_filament_idx >= color_type->values.size()) color_type->values.resize(m_filament_idx + 1);
 
     color_head->values[m_filament_idx] = color;
     color_type->values[m_filament_idx] = ctype;
@@ -1629,15 +1639,15 @@ void PlaterPresetComboBox::show_default_color_picker()
 void PlaterPresetComboBox::sync_colour_config(const std::vector<std::string> &clrs, bool is_gradient)
 {
     DynamicPrintConfig *cfg = &wxGetApp().preset_bundle->project_config;
+    if (!colour_arrays_hold_slot(*cfg, m_filament_idx)) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": filament %1% lies past the colour arrays") % m_filament_idx;
+        return;
+    }
 
     // Clone the string vector and patch the value at current extruder index.
     auto multi_colour_opt = static_cast<ConfigOptionStrings *>(cfg->option("filament_multi_colour")->clone());
     auto colour_type_opt = static_cast<ConfigOptionStrings *>(cfg->option("filament_colour_type")->clone());
     auto colour_opt = static_cast<ConfigOptionStrings *>(cfg->option("filament_colour")->clone());
-
-    if (m_filament_idx >= multi_colour_opt->values.size()) multi_colour_opt->values.resize(m_filament_idx + 1);
-    if (m_filament_idx >= colour_type_opt->values.size()) colour_type_opt->values.resize(m_filament_idx + 1);
-    if (m_filament_idx >= colour_opt->values.size()) colour_opt->values.resize(m_filament_idx + 1);
 
     std::string clr_str = "";
     for(auto &clr : clrs) {
