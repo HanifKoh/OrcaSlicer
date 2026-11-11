@@ -33,6 +33,8 @@ static const std::set<std::string> per_filament_extra_keys = {
     "filament_colour",          // deliberately commented out of filament_options()
     "filament_colour_type",
     "filament_multi_colour",
+    "filament_nozzle_map",
+    "filament_volume_map",
     // Mixed-colour slot metadata: one entry per slot, kept in step by PresetBundle's slot sizing.
     "filament_is_mixed",
     "filament_mixed_components",
@@ -107,8 +109,6 @@ static const std::set<std::string> custom_keys = {
     "deretract_speed_extruder_change", // per-extruder (printer field, not in printer_extruder_options)
     "filament_self_index",          // per-filament
     "filament_map_2",               // per-filament (sibling of filament_map)
-    "filament_nozzle_map",          // per-filament
-    "filament_volume_map",          // per-filament
     "filament_max_temperature_drop_when_ec", // per-filament
     "flush_multiplier_fast",        // flush multiplier, not one-per-N (sibling of flush_multiplier)
     "machine_min_extruding_rate",   // sibling of the PerExtruderVariantDual machine_max_*
@@ -265,7 +265,12 @@ static void resize_option(ConfigOption *opt, size_t want, const std::string &key
     auto *vec = static_cast<ConfigOptionVectorBase *>(opt);
     if (vec->size() == want)
         return;
+    // Project-only keys (filament_colour_type, the mixed arrays) are not FullPrintConfig members; their
+    // schema default is the fallback.
     const ConfigOption *def = FullPrintConfig::defaults().option(key);
+    if (def == nullptr)
+        if (const ConfigOptionDef *schema = print_config_def.get(key); schema != nullptr)
+            def = schema->default_value.get();
     if (vec->empty()) {
         const bool default_empty = def == nullptr || !def->is_vector()
             || static_cast<const ConfigOptionVectorBase *>(def)->empty();

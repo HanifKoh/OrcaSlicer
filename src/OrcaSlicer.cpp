@@ -2525,7 +2525,9 @@ int CLI::run(int argc, char **argv)
         }
     }
 
-    if (filament_count == 0)
+    // More filaments loaded than the project has: the loaded count is the filament count, so the
+    // per-filament arrays and the variant tables below are built for the loaded filaments too.
+    if (load_filament_count > filament_count)
         filament_count = load_filament_count;
 
     if (is_bbl_3mf && (load_filament_count > 0) && (load_filaments_set.size() == 1))
@@ -3164,13 +3166,14 @@ int CLI::run(int argc, char **argv)
     // Load the project's printer and process settings as the GUI loads its presets: over the default preset,
     // with every key the project does not list as changed, including keys saved before an option existed,
     // taken from its current system preset. Without refresh_unlisted the project only gets the keys it lacks.
-    auto load_project_preset = [this, &ensure_system_preset_resolver, &current_different_settings, refresh_unlisted, filament_count](const std::string &system_name, Preset::Type type) {
+    auto load_project_preset = [this, &ensure_system_preset_resolver, &current_different_settings, refresh_unlisted](const std::string &system_name, Preset::Type type) {
         if (system_name.empty())
             return;
         // Preset bookkeeping the CLI keeps in its own groups, e.g. inherits_group and print_compatible_printers.
         static const std::set<std::string> bookkeeping_keys = {"inherits", "compatible_printers", "compatible_prints", "compatible_printers_condition",
                                                                "compatible_prints_condition", "print_settings_id", "printer_settings_id"};
-        const size_t       index = type == Preset::TYPE_PRINTER ? filament_count + 1 : 0;
+        // The project's columns are the print, one per project filament, then the printer.
+        const size_t       index = type == Preset::TYPE_PRINTER && !current_different_settings.empty() ? current_different_settings.size() - 1 : 0;
         PresetBundle      &resolver = ensure_system_preset_resolver();
         DynamicPrintConfig system_config;
         t_config_option_keys keys;
@@ -3201,8 +3204,25 @@ int CLI::run(int argc, char **argv)
 
     std::vector<std::string>& different_settings = m_print_config.option<ConfigOptionStrings>("different_settings_to_system", true)->values;
     std::vector<std::string>& inherits_group = m_print_config.option<ConfigOptionStrings>("inherits_group", true)->values;
-    inherits_group.resize(filament_count + 2, std::string());
-    different_settings.resize(filament_count + 2, std::string());
+    // One column for the print, one per filament and one for the printer. A project with fewer
+    // filaments than are loaded keeps its printer column last.
+    auto widen_columns = [filament_count](std::vector<std::string> &columns) {
+        const size_t width = static_cast<size_t>(filament_count) + 2;
+        if (columns.size() >= 2 && columns.size() < width) {
+            std::string printer_column = std::move(columns.back());
+            columns.back().clear();
+            columns.resize(width - 1);
+            columns.push_back(std::move(printer_column));
+        } else
+            columns.resize(width);
+    };
+    widen_columns(inherits_group);
+    widen_columns(different_settings);
+    if (auto *columns = m_print_config.option<ConfigOptionStrings>("compatible_machine_expression_group"); columns != nullptr && !columns->values.empty())
+        widen_columns(columns->values);
+    // The process group has one column per filament and nothing else.
+    if (auto *columns = m_print_config.option<ConfigOptionStrings>("compatible_process_expression_group"); columns != nullptr && !columns->values.empty())
+        columns->values.resize(static_cast<size_t>(filament_count));
     if (!is_bbl_3mf && !different_process_setting.empty()) {
         different_settings[0] = different_process_setting;
     }
@@ -3513,36 +3533,46 @@ int CLI::run(int argc, char **argv)
         std::vector<int> old_start_indice(filament_count, 0);
         std::vector<int> old_variant_counts(filament_count, 1), new_variant_counts;
 
-        ConfigOptionInts* filament_self_index_opt = m_print_config.option<ConfigOptionInts>("filament_self_index");
-        bool need_regenerate_self_index = !filament_self_index_opt;
-        if (filament_self_index_opt) {
-            // a filament_self_index carried over from a stale project can disagree with the
-            // current filament_count. old_start_indice/old_variant_counts below are sized to
-            // filament_count and walked with 1-based group indices, so an index above
-            // filament_count overruns old_start_indice[++k], and a non-positive first index
-            // writes old_variant_counts[-1] - both heap corruption.
-            int max_self_index = 0, min_self_index = 1;
+        ConfigOptionInts*    filament_self_index_opt = m_print_config.option<ConfigOptionInts>("filament_self_index");
+        ConfigOptionStrings* filament_variant_opt    = m_print_config.option<ConfigOptionStrings>("filament_extruder_variant");
+        const std::string    standard_variant        = get_extruder_variant_string(etDirectDrive, nvtStandard);
+        // The self index names the filament of every entry of the variant list: the two are one table.
+        bool need_regenerate_self_index = filament_self_index_opt == nullptr || filament_variant_opt == nullptr ||
+                                          filament_self_index_opt->values.size() != filament_variant_opt->values.size();
+        if (!need_regenerate_self_index) {
+            // old_start_indice/old_variant_counts below are sized to filament_count and walked with
+            // 1-based group indices, so the index has to run 1, 2, ... in order, one run per filament,
+            // and never above filament_count - a stale project can disagree with any of that.
+            int  last_index = 0;
+            bool in_order   = true;
             for (int v : filament_self_index_opt->values) {
-                max_self_index = std::max(max_self_index, v);
-                min_self_index = std::min(min_self_index, v);
+                if (v < last_index || v > last_index + 1) {
+                    in_order = false;
+                    break;
+                }
+                last_index = v;
             }
-            // And a project saved with FEWER filaments than are now loaded (a
-            // one-filament project sliced with two --load-filaments) leaves the tables half filled:
-            // the variant matching below then reads past filament_extruder_variant and
-            // set_with_restore_2 throws an uncaught size error. Regenerate in that case too.
-            if (max_self_index > filament_count || min_self_index < 1 || max_self_index < filament_count
-                || (int) filament_self_index_opt->values.size() < filament_count) {
-                BOOST_LOG_TRIVIAL(warning) << boost::format("filament_self_index range [%1%, %2%] (size %4%) is invalid for filament_count %3%, regenerating")
-                        % min_self_index % max_self_index % filament_count % filament_self_index_opt->values.size();
+            if (!in_order || last_index > filament_count) {
+                BOOST_LOG_TRIVIAL(warning) << boost::format("filament_self_index %1% (size %3%) is invalid for filament_count %2%, regenerating")
+                        % filament_self_index_opt->serialize() % filament_count % filament_self_index_opt->values.size();
                 need_regenerate_self_index = true;
+            } else {
+                // More filaments loaded than the project knew: one variant each for the extra ones,
+                // which the loaded presets replace below.
+                for (int index = last_index + 1; index <= filament_count; index++) {
+                    filament_self_index_opt->values.push_back(index);
+                    filament_variant_opt->values.push_back(standard_variant);
+                }
             }
         }
         if (need_regenerate_self_index) {
             filament_self_index_opt = m_print_config.option<ConfigOptionInts>("filament_self_index", true);
+            filament_variant_opt    = m_print_config.option<ConfigOptionStrings>("filament_extruder_variant", true);
             std::vector<int>& filament_self_indice = filament_self_index_opt->values;
             filament_self_indice.resize(filament_count);
             for (int index = 0; index < filament_count; index++)
                 filament_self_indice[index] = index + 1;
+            filament_variant_opt->values.assign(filament_count, standard_variant);
         }
 
         std::vector<int> old_self_indice= filament_self_index_opt->values;
@@ -3846,24 +3876,37 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // Every per-filament array is one value per loaded filament from here on: size the ones a project
+    // or a preset left short before anything indexes them, the way Print::apply does for the slice. The
+    // mixed-slot arrays are padded with their defaults first, so a mix in the first slot is not copied
+    // onto the padded ones; their loaded length is kept for the slot check further down.
+    std::vector<unsigned char> loaded_mixed_flags;
+    if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed")) {
+        loaded_mixed_flags = is_mixed_opt->values;
+        const auto *diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter");
+        const size_t padded   = std::max(loaded_mixed_flags.size(), diameters ? diameters->values.size() : size_t(0));
+        resize_mixed_filament_metadata(m_print_config, loaded_mixed_flags.size(), padded);
+    }
+    // A model given several filaments but no colours gets the default ones now rather than from the
+    // defaults merge below, so its matrix is computed for those filaments, as the GUI does for a new project.
+    if (const auto *diameters = m_print_config.option<ConfigOptionFloats>("filament_diameter");
+        filament_count > 1 && diameters != nullptr && diameters->values.size() == static_cast<size_t>(filament_count))
+        m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+    m_print_config.enforce_cardinality();
+
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
-    // Filament presets carry no colour, so loading filaments can leave the palette shorter than the
-    // filament count. Tool ordering sizes its per-filament tables from filament_colour, so a short
-    // palette makes every later filament index read out of bounds. Grow it and rebuild the flush matrix.
-    const bool filament_colors_grown = filament_count > 0 &&
-        (!project_filament_colors_option || project_filament_colors_option->values.size() < size_t(filament_count));
-    if (filament_colors_grown)
+    if ((!project_filament_colors_option || (project_filament_colors_option->values.size() == 0)) && selected_filament_colors_option)
     {
-        BOOST_LOG_TRIVIAL(info) << boost::format("project filament_colour is shorter than the %1% filaments, padding it") % filament_count;
+        BOOST_LOG_TRIVIAL(info) << boost::format("initial project_filament_colors is null, create it due to filament_colour set in cli");
         project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
         std::vector<std::string>& project_filament_colors = project_filament_colors_option->values;
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
 
     if (project_filament_colors_option &&
-        (filament_colors_grown || selected_filament_colors_option || !m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix") || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
+        (selected_filament_colors_option || !m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix") || (current_extruder_count != new_extruder_count) || (new_nozzle_volume_type != current_nozzle_volume_type)))
     {
         std::vector<std::string>  selected_filament_colors;
         if (selected_filament_colors_option) {
@@ -4241,7 +4284,14 @@ int CLI::run(int argc, char **argv)
     // filament ids aimed at it fall outside the filament count, are reset to the first filament
     // and the model silently prints in a single colour.
     if (const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed")) {
-        const auto &is_mixed = is_mixed_opt->values;
+        // The sizing above cut the loaded flags to the filament count, so the loaded ones are checked too.
+        std::vector<unsigned char> is_mixed = is_mixed_opt->values;
+        for (size_t slot = 0; slot < loaded_mixed_flags.size(); ++slot)
+            if (loaded_mixed_flags[slot]) {
+                if (is_mixed.size() <= slot)
+                    is_mixed.resize(slot + 1, false);
+                is_mixed[slot] = true;
+            }
         for (size_t slot = static_cast<size_t>(std::max(filament_count, 0)); slot < is_mixed.size(); ++slot) {
             if (!is_mixed[slot])
                 continue;
@@ -4269,6 +4319,9 @@ int CLI::run(int argc, char **argv)
         //ORCA: an option no preset or project defines has just come in as its single default value, and a
         //      command line override may hold one value per filament.
         normalize_filament_values_to_variants(m_print_config);
+        // Those defaults and overrides are per-N arrays too: size them like the ones loaded earlier, so
+        // the exported project holds every array at its full length whichever way it was assembled.
+        m_print_config.enforce_cardinality();
     } else {
         boost::nowide::cerr << "invalid printer_technology " << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PRINTER_TECH, 0, cli_errors[CLI_INVALID_PRINTER_TECH], sliced_info);
