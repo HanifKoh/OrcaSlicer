@@ -435,37 +435,11 @@ const std::vector<std::string> &count_source_keys()
     return keys;
 }
 
-// Cases that crash the process on this tree, so the sweep leaves them out until they are fixed. Each one reads an
-// array that nothing has sized yet:
-//  - an empty printer or process variant option, extruder_type, nozzle_volume_type or extruder_variant_list: the
-//    variant expansion at the top of Print::apply, through get_at();
-//  - an empty filament_self_index: Print::get_filament_unprintable_flow;
-//  - an empty flush_volumes_matrix: the flush tables of Print::_make_wipe_tower;
-//  - an empty flush multiplier of the prime-volume mode (flush_multiplier, flush_multiplier_fast in Fast mode):
-//    GCode::append_full_config divides by its size;
-//  - fewer nozzle_diameter entries than filament_map names extruders: GCode::print_machine_envelope.
-bool is_known_crash(const DynamicPrintConfig &base, const std::string &key, Mutation m)
+// Cases that crash the process on this tree, so the sweep leaves them out until they are fixed: fewer nozzle_diameter
+// entries than filament_map names extruders, where GCode::print_machine_envelope indexes the machine limits past them.
+bool is_known_crash(const std::string &key, Mutation m)
 {
-    static const std::set<std::string> empty_crashes = { "extruder_type", "nozzle_volume_type", "extruder_variant_list",
-                                                         "filament_self_index", "flush_volumes_matrix", "nozzle_diameter" };
-    const bool              fast_purge = base.opt_enum<PrimeVolumeMode>("prime_volume_mode") == pvmFast;
-    const ConfigCardinality c          = cardinality_of(key);
-    if (m == Mutation::Empty)
-        return c == ConfigCardinality::PerExtruderVariant || c == ConfigCardinality::PerExtruderVariantDual ||
-               c == ConfigCardinality::PerProcessVariant || empty_crashes.count(key) > 0 ||
-               key == (fast_purge ? "flush_multiplier_fast" : "flush_multiplier");
-    return m == Mutation::One && key == "nozzle_diameter";
-}
-
-// Cases that read out of bounds without crashing a plain build, so what they do there is luck. They run in the full
-// tier only, where AddressSanitizer reports the read:
-//  - filament_self_index one entry or one short, filament_extruder_variant one long:
-//    Print::get_filament_unprintable_flow indexes the index list by the length of the variant list;
-//  - flush_volumes_matrix one entry: the flush tables of Print::_make_wipe_tower read past it.
-bool reads_out_of_bounds(const std::string &key, Mutation m)
-{
-    return (key == "filament_self_index" && (m == Mutation::One || m == Mutation::Short)) ||
-           (key == "filament_extruder_variant" && m == Mutation::Long) || (key == "flush_volumes_matrix" && m == Mutation::One);
+    return key == "nozzle_diameter" && (m == Mutation::Empty || m == Mutation::One);
 }
 
 // Whether the default an empty option would be extended from is empty too, looked up as enforce_cardinality does.
@@ -626,9 +600,8 @@ void check_outcome(const SweepOutcome &out)
     CHECK(out.mis_sized == std::vector<std::string>{});
 }
 
-// How far a sweep takes each case: through apply only, on to G-code, or on to G-code with the cases a plain build
-// reads out of bounds as well, for the AddressSanitizer run.
-enum class SweepTier { Apply, Slice, Full };
+// How far a sweep takes each case: through apply only, or on to G-code.
+enum class SweepTier { Apply, Slice };
 
 // Every key of `keys` given each wrong length on `base`, one section per case, so a failure names its case and
 // `-c "<section>"` runs it alone.
@@ -645,7 +618,7 @@ void sweep_lengths(const DynamicPrintConfig &base, const std::set<std::string> &
         for (Mutation m : { Mutation::Empty, Mutation::One, Mutation::Short, Mutation::Long }) {
             const size_t len = mutated_length(m, n);
             // A length already tried says nothing new.
-            if (!tried.insert(len).second || is_known_crash(base, key, m) || (tier == SweepTier::Slice && reads_out_of_bounds(key, m)))
+            if (!tried.insert(len).second || is_known_crash(key, m))
                 continue;
             DYNAMIC_SECTION(key << " " << mutation_name(m)) {
                 DynamicPrintConfig config = base;
@@ -783,5 +756,5 @@ TEST_CASE("An object on a filament past the filament count slices or is refused 
 TEST_CASE("Every per-N and shaped option of the wrong length slices or is refused cleanly", "[.][Cardinality][MismatchSweepFull]")
 {
     const DynamicPrintConfig base = sweep_config();
-    sweep_lengths(base, all_sweep_keys(base), SweepTier::Full);
+    sweep_lengths(base, all_sweep_keys(base), SweepTier::Slice);
 }

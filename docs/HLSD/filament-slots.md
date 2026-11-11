@@ -273,10 +273,10 @@ extra filaments therefore print with the tool numbers of the slots ahead of the 
   sources, the `Custom` options with a shape of their own (`flush_multiplier_fast` under
   the Fast prime-volume mode too) and the slot arrays must slice or be refused cleanly;
   the bundle's slot writers must bring a mis-sized slot array back to the slot count.
-  The cases that crash are listed in the test and left out. A case a plain build reads
-  out of bounds without crashing runs only in the hidden `[MismatchSweepFull]`, which
-  slices every case, and the Sanitizer Nightly workflow runs it under AddressSanitizer,
-  which reports those reads.
+  The cases that crash are listed in the test and left out. The hidden
+  `[MismatchSweepFull]` slices every per-N option given every wrong length, and the
+  Sanitizer Nightly workflow runs it under AddressSanitizer, which reports an
+  out-of-bounds read that does not crash a plain build.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
