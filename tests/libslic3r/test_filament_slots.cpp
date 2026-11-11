@@ -660,6 +660,55 @@ TEST_CASE("Syncing the AMS keeps each slot's values with a mix behind a High Flo
     CHECK(bundle.ams_multi_color_filment.size() == 5);
 }
 
+// The mix moves down with the physical count, and the sync records the move for the owner of the model.
+TEST_CASE("Syncing the AMS records where the mixed tail moves", "[Preset][Bundle][FilamentSlots][AMS]")
+{
+    PresetBundle bundle;
+    set_mixed_tail(bundle);
+    const std::string filament_id = add_tray_filament(bundle);
+
+    size_t                   trays    = 4;
+    std::map<int, int>       expected;
+    SECTION("more trays than physical slots") { trays = 6; expected = { { 4, 6 } }; }
+    SECTION("fewer trays than physical slots") { trays = 2; expected = { { 4, 2 } }; }
+    SECTION("as many trays as physical slots") { trays = 4; }
+    for (size_t i = 0; i < trays; ++i)
+        add_tray(bundle, filament_id, "#A0000" + std::to_string(i));
+    std::vector<std::pair<DynamicPrintConfig *, std::string>> unknowns;
+    std::map<int, AMSMapInfo>                                 maps;
+    MergeFilamentInfo                                         merge_info;
+    REQUIRE(bundle.sync_ams_list(unknowns, false, maps, false, merge_info) == trays + 1);
+
+    CHECK(mixed_flags(bundle).back());
+    CHECK(bundle.take_pending_slot_relocations() == expected);
+}
+
+// A slot arrives in the preset list alone, ahead of the mix, so the arrays are a slot short. Each writer counts the
+// slots and works on the arrays by position, so it sizes them first.
+TEST_CASE("The slot writers put a missing value ahead of the mixed tail before they change the slots", "[Preset][Bundle][FilamentSlots]")
+{
+    PresetBundle bundle;
+    bundle.set_num_filaments(4u, "#FF0000");
+    mixed_flags(bundle) = { false, false, false, true };
+    bundle.project_config.option<ConfigOptionStrings>("filament_mixed_components")->values = { "", "", "", "2,3" };
+    bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values           = { "#000000", "#111111", "#222222", "#777777" };
+    bundle.filament_presets.insert(bundle.filament_presets.begin() + 3, bundle.filament_presets[2]);
+    REQUIRE_FALSE(bundle.filament_slots_consistent());
+
+    // The mix stays on its own slot: 4 once the missing value is ahead of it, 5 after an insert at 1, 3 after the slot at 3 goes.
+    size_t mix = 4;
+    SECTION("set_num_filaments") { bundle.set_num_filaments(6u, "#FF0000"); }
+    SECTION("insert_filament_slot") { bundle.insert_filament_slot(1, "#ABCDEF"); mix = 5; }
+    SECTION("update_num_filaments") { bundle.update_num_filaments(3); mix = 3; }
+
+    CHECK(bundle.filament_slots_consistent());
+    const std::vector<std::string> colours = strings(bundle, "filament_colour");
+    REQUIRE(colours.size() > mix);
+    CHECK(colours[mix] == "#777777");
+    CHECK(mixed_flags(bundle)[mix]);
+    CHECK(strings(bundle, "filament_mixed_components")[mix] == "2,3");
+}
+
 TEST_CASE("Growing the physical filaments inserts them ahead of the mixed tail and records the moves", "[Preset][Bundle][FilamentSlots]")
 {
     PresetBundle bundle;

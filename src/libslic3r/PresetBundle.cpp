@@ -4522,6 +4522,8 @@ void PresetBundle::normalize_filament_slots()
 void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 {
     assert(m_pending_slot_relocations.empty());
+    // The resize counts the old slots from the colours and works on each array by position.
+    normalize_filament_slots();
     const size_t old_filament_count = this->filament_presets.size();
     if (n < old_filament_count && num_mixed_filaments() > 0) {
         BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": refused to cut " << old_filament_count << " slots to " << n
@@ -4538,6 +4540,7 @@ void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 
 std::map<int, int> PresetBundle::insert_filament_slot(size_t pos, const std::string &colour)
 {
+    normalize_filament_slots();
     const size_t n = num_filament_slots();
     pos            = std::min(pos, n);
     filament_presets.insert(filament_presets.begin() + pos,
@@ -4588,6 +4591,7 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
     assert(to_del_flament_id < this->filament_presets.size());
     // A recorded move is in the current numbering; the owner applies it before the slots change again.
     assert(m_pending_slot_relocations.empty());
+    normalize_filament_slots();
     erase_filament_slot(to_del_flament_id);
     update_multi_material_filament_presets();
 }
@@ -4940,6 +4944,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         std::string color_type;
         int         volume_map = static_cast<int>(NozzleVolumeType::nvtStandard);
         int         nozzle_map = 0;
+        size_t      slot = 0;
         std::string mixed_components;
         std::string mixed_sublayer_ratios;
         bool        mixed_gradient = false;
@@ -4960,6 +4965,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             if (!is_mixed_opt->values[i])
                 continue;
             MixedSlotSnapshot snap;
+            snap.slot       = i;
             snap.preset     = this->filament_presets[i];
             snap.color      = (i < filament_color->values.size())      ? filament_color->values[i]      : "";
             snap.color_type = (i < filament_color_type->values.size()) ? filament_color_type->values[i] : "";
@@ -5276,7 +5282,9 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         if (mixed_grad_curve_opt) mixed_grad_curve_opt->values.resize(new_phys_count);
         if (mixed_per_part_opt)   mixed_per_part_opt->values.resize(new_phys_count, (unsigned char)false);
 
+        std::map<int, int> moved;
         for (auto& snap : mixed_snapshots) {
+            moved.emplace(static_cast<int>(snap.slot), static_cast<int>(this->filament_presets.size()));
             this->filament_presets.push_back(snap.preset);
             filament_color->values.push_back(snap.color);
             filament_color_type->values.push_back(snap.color_type);
@@ -5292,6 +5300,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             if (mixed_grad_curve_opt) mixed_grad_curve_opt->values.push_back(snap.mixed_gradient_curve);
             if (mixed_per_part_opt)   mixed_per_part_opt->values.push_back((unsigned char)snap.mixed_gradient_per_part);
         }
+        compose_slot_relocations(m_pending_slot_relocations, moved);
     }
 
     // Update ams_multi_color_filment
