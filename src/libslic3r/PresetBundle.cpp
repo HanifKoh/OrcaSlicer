@@ -5284,7 +5284,6 @@ void PresetBundle::update_filament_multi_color()
         }
     }
     ConfigOptionStrings *filament_multi_colour = project_config.option<ConfigOptionStrings>("filament_multi_colour");
-    filament_multi_colour->resize(exsit_multi_colors.size());
     filament_multi_colour->values = exsit_multi_colors;
 }
 
