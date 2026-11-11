@@ -93,7 +93,8 @@ hold one value per slot whether or not the top-up then adds a slot:
   saved with, and the nozzle maps are not saved and start on their defaults.
 - The AMS sync sets the mixed tail aside, sizes the arrays to the synced physical
   slots, and puts the tail back behind them; a mixed slot keeps its volume and nozzle
-  maps and its mix settings.
+  maps and its mix settings. The sync records each mixed slot's move as a slot
+  relocation, so objects painted with a mix follow it to its new slot.
 
 A writer that sets one slot's value (the sidebar's colour picker, a combo's AMS colour,
 the global nozzle maps) writes into the slots the arrays hold and never resizes them.
@@ -128,8 +129,9 @@ colour pickers, which index the bundle's arrays by slot before any slice sizes t
 back in step and logs the ones it repaired. The bundle's entry points that rewrite the
 slot arrays call it before they return: `load_selections`,
 `update_selections`, the project load (`load_config_file_config`), `sync_ams_list`,
-`reload_local_bundle` and `restore_selection`. The nozzle-count top-up and
-`set_num_physical_filaments` call it before they insert or remove slots, because the
+`reload_local_bundle` and `restore_selection`. The nozzle-count top-up,
+`set_num_physical_filaments`, `set_num_filaments`, `insert_filament_slot` and
+`update_num_filaments` call it before they insert or remove slots, because the
 insertion keeps each array's values up to the colours' length, the removal erases one value
 by position, and both count the mixed flags. `set_num_filaments`, `update_num_filaments`
 and `set_num_physical_filaments` end in the top-up, so its call also checks what they
