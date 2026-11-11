@@ -1208,9 +1208,6 @@ TEST_CASE("An AMS sync onto a slot array of the wrong length leaves every slot a
         for (size_t len : { 0, 1, 2, 4 })
             for (int trays : { 2, 3, 4 })
                 for (bool colour_only : { false, true }) {
-                    // Still broken, and held by the test below.
-                    if (colour_only && key == "filament_multi_colour" && len == 0)
-                        continue;
                     DYNAMIC_SECTION(key << " at " << len << " of 3, then a " << (colour_only ? "colour-only " : "") << "sync of " << trays << " trays") {
                         PresetBundle bundle;
                         bundle.set_num_filaments(3u, "#111111");
@@ -1220,14 +1217,4 @@ TEST_CASE("An AMS sync onto a slot array of the wrong length leaves every slot a
                         CHECK(bundle.filament_slots_consistent());
                     }
                 }
-}
-
-// Still broken: update_filament_multi_color resizes an empty filament_multi_colour without a default and throws.
-TEST_CASE("A colour-only AMS sync onto an empty filament_multi_colour leaves every slot array at the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep][!shouldfail]")
-{
-    PresetBundle bundle;
-    bundle.set_num_filaments(3u, "#111111");
-    resize_slot_array(bundle, "filament_multi_colour", 0);
-    sync_onto_trays(bundle, 3, true);
-    CHECK(bundle.filament_slots_consistent());
 }
