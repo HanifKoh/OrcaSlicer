@@ -5139,7 +5139,7 @@ static bool create_mixed_filament_from_result(
         presets[new_idx] = presets[result.components[0] - 1];
 
     size_t filament_count = wxGetApp().preset_bundle->filament_presets.size();
-    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count);
+    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count, new_idx);
     wxGetApp().plater()->on_filament_count_change(filament_count);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
@@ -5988,7 +5988,7 @@ void Sidebar::add_custom_filament(wxColour new_col, const std::string& preset_na
         wxGetApp().preset_bundle->filament_presets[insert_pos] = preset_name;
     }
 
-    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count);
+    wxGetApp().plater()->get_partplate_list().on_filament_added(filament_count, insert_pos);
     wxGetApp().plater()->on_filament_count_change(filament_count);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
@@ -8495,21 +8495,28 @@ void Plater::apply_pending_filament_slot_relocations()
 
 void Plater::sync_filament_slots_from_bundle(size_t slots_before)
 {
-    apply_pending_filament_slot_relocations();
-    auto        *bundle = wxGetApp().preset_bundle;
-    const size_t slots  = bundle->num_filament_slots();
-    if (slots <= slots_before)
+    auto *bundle = wxGetApp().preset_bundle;
+    const std::map<int, int> moved = bundle->take_pending_slot_relocations();
+    // Slots the bundle removed leave the plates' maps first, from the back, in the old numbering.
+    size_t slots_left = slots_before;
+    for (auto it = moved.rbegin(); it != moved.rend(); ++it)
+        if (it->second < 0)
+            get_partplate_list().on_filament_deleted(static_cast<int>(--slots_left), it->first);
+    Slic3r::remap_model_filament_slots(model(), moved);
+    const size_t slots = bundle->num_filament_slots();
+    const size_t added = slots > slots_left ? slots - slots_left : 0;
+    if (added == 0 && slots_left == slots_before)
         return;
     // The same steps Sidebar::add_custom_filament takes for one slot, for each slot the bundle
     // added: the new physical slots sit just ahead of the mixed tail.
-    for (size_t slot = slots_before; slot < slots; ++slot)
-        get_partplate_list().on_filament_added(static_cast<int>(slot + 1));
+    const size_t first_new = bundle->num_physical_filaments() - added;
+    for (size_t i = 0; i < added; ++i)
+        get_partplate_list().on_filament_added(static_cast<int>(slots_left + i + 1), first_new + i);
     on_filament_count_change(slots);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     bundle->export_selections(*wxGetApp().app_config);
-    const size_t first_new = bundle->num_physical_filaments() - (slots - slots_before);
-    for (size_t slot = first_new; slot < bundle->num_physical_filaments(); ++slot)
-        sidebar().auto_calc_flushing_volumes(static_cast<int>(slot));
+    for (size_t i = 0; i < added; ++i)
+        sidebar().auto_calc_flushing_volumes(static_cast<int>(first_new + i));
 }
 
 wxString Plater::get_slice_warning_string(GCodeProcessorResult::SliceWarning& warning)
@@ -9516,14 +9523,15 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         }
                         int size = extruderIds.size() == 0 ? 0 : *(extruderIds.rbegin());
 
-                        int filament_size = sidebar->combos_filament().size();
-                        while (filament_size < MAXIMUM_EXTRUDER_NUMBER && filament_size < size) {
-                            int         filament_count = filament_size + 1;
-                            wxColour    new_col        = Plater::get_next_color_for_filament();
-                            std::string new_color      = new_col.GetAsString(wxC2S_HTML_SYNTAX).ToStdString();
-                            wxGetApp().preset_bundle->set_num_filaments(filament_count, new_color);
-                            wxGetApp().plater()->on_filament_count_change(filament_count);
-                            ++filament_size;
+                        // The imported objects name the filaments of their source, which are physical: a geometry-only
+                        // import brings no mixed definitions. The project grows its physical filaments to the highest
+                        // id ahead of its mixed tail, so an id that named one of its mixed slots names a filament now,
+                        // and the objects already on the plate follow the mixes they use.
+                        auto *bundle = wxGetApp().preset_bundle;
+                        if (size > 0 && static_cast<size_t>(size) > bundle->num_physical_filaments()) {
+                            const size_t slots_before = bundle->num_filament_slots();
+                            bundle->set_num_physical_filaments(static_cast<size_t>(size));
+                            q->sync_filament_slots_from_bundle(slots_before);
                         }
                         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
                     }
@@ -9634,7 +9642,6 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         ;
                     }
                     else {
-                        this->model.plates_custom_gcodes = model.plates_custom_gcodes;
                         this->model.design_info = model.design_info;
                         this->model.model_info = model.model_info;
                     }
@@ -9923,6 +9930,9 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     }
                     if (!silence) wxGetApp().app_config->update_config_dir(path.parent_path().string());
                 }
+                // The plates' tool changes go to the plater after the slot moves of this load re-pointed them.
+                if (!load_model || load_config)
+                    this->model.plates_custom_gcodes = model.plates_custom_gcodes;
             } else {
                 // BBS: add plate data related logic
                 PlateDataPtrs& plate_data = parsed_file.plates;

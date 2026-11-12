@@ -458,16 +458,26 @@ public:
     static const std::vector<std::string> &filament_slot_keys();
     size_t          num_filament_slots() const { return filament_presets.size(); }
     // n is the total slot count. Growth appends at the raw tail, where the mixed slots live, so a
-    // caller adding a physical filament uses insert_filament_slot instead. New slots take new_col,
-    // or the next palette colour when it is empty.
+    // caller adding a physical filament uses insert_filament_slot or set_num_physical_filaments
+    // instead. New slots take new_col, or the next palette colour when it is empty. A shrink is
+    // refused while there are mixed slots, as cutting at the tail would drop the mixes: physical
+    // filaments are removed with set_num_physical_filaments or update_num_filaments.
     void            set_num_filaments(unsigned int n, std::string new_col = "");
     void            update_num_filaments(unsigned int to_del_flament_id);
     // Insert one physical slot at pos with the given or the next palette colour, copying the preset
     // of the slot before it. Returns old -> new index (0-based) of every slot that moved up, for the
     // caller to apply to its model with remap_model_filament_slots.
     std::map<int, int> insert_filament_slot(size_t pos, const std::string &colour = std::string());
-    // Slots the nozzle-count top-up moved on its own (physical slots inserted ahead of the mixed
-    // tail). The owner of the model takes and applies them; the record is empty afterwards.
+    // Bring the physical filaments to n (at least one), keeping the mixed tail last. Growth inserts
+    // each slot ahead of the mixed tail with a copy of the last physical preset and a palette colour;
+    // a shrink removes the last physical slots, as update_num_filaments removes one. The mixed slots
+    // move with the physical count, and every move is recorded for take_pending_slot_relocations().
+    // Normalises the slot arrays first, as the top-up does, and ends with the top-up, which can put
+    // back slots a tool changer needs.
+    void            set_num_physical_filaments(size_t n);
+    // Slots the bundle moved on its own (physical slots inserted ahead of the mixed tail or removed
+    // from its front), as old -> new index, -1 for a removed slot. The owner of the model takes and
+    // applies them with remap_model_filament_slots; the record is empty afterwards.
     std::map<int, int> take_pending_slot_relocations();
     // Next colour of the fixed palette: one sequence for every slot added without a colour.
     std::string     next_filament_colour();
@@ -485,7 +495,8 @@ public:
     // Bring every slot array back to one value per slot when a writer left them out of step, logging
     // each new mismatch once. A missing value is a physical slot's: in every array it goes ahead of the
     // mixed tail, seeded as a new slot's. An extra one is dropped and logged. The bundle's entry points
-    // that rewrite the slot arrays call it before they return, and the nozzle-count top-up before it inserts.
+    // that rewrite the slot arrays call it before they return, and the nozzle-count top-up and
+    // set_num_physical_filaments before they insert or remove slots.
     void            normalize_filament_slots();
     // How many times normalize_filament_slots() found the slots out of step, and what it found last.
     size_t          filament_slot_repairs() const { return m_filament_slot_repairs; }
@@ -778,6 +789,13 @@ private:
     // Size every slot array to n. Entries beyond the colour array's old length count as new and
     // are seeded: colours with new_colour or the palette, maps and flags with their slot defaults.
     void                resize_filament_slot_arrays(size_t n, const std::string &new_colour);
+    // Insert physical slots ahead of the mixed tail until there are n, recording the moves. A slot
+    // added at the end of the list takes the colour saved_colours holds for it, if any.
+    void                insert_physical_filament_slots(size_t n, const std::vector<std::string> &saved_colours);
+    // Remove one slot from the preset list and every slot array, renumbering the mixed components
+    // and the flush matrix, without the top-up.
+    void                erase_filament_slot(size_t idx);
+    // Original -> current index of every slot the bundle moved; -1 for a slot it removed.
     std::map<int, int>  m_pending_slot_relocations;
     size_t              m_next_palette_colour = 0;
     // normalize_filament_slots(): the repairs it made, the last one's findings, and the

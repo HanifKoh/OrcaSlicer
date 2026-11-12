@@ -454,8 +454,9 @@ public:
     // Re-point the model at slots the preset bundle moved on its own (see
     // PresetBundle::take_pending_slot_relocations).
     void apply_pending_filament_slot_relocations();
-    // After the bundle grew the slot list by itself (printer with more nozzles than the project
-    // has physical filaments): re-point the model, then size the plates and the sidebar to it.
+    // After the bundle changed the slot list by itself (the nozzle-count top-up, or
+    // set_num_physical_filaments): re-point the model to the slot moves it recorded, then move the
+    // plates' filament maps with the slots and size the sidebar to them.
     void sync_filament_slots_from_bundle(size_t slots_before);
     static wxString get_slice_warning_string(GCodeProcessorResult::SliceWarning& warning);
 

@@ -739,7 +739,8 @@ public:
 
     void on_extruder_count_changed(int extruder_count);
     void set_filament_count(int filament_count);
-    void on_filament_added();
+    // A slot was inserted at `slot`: the plate's own maps get its defaults there.
+    void on_filament_added(size_t slot);
     void on_filament_deleted(int filament_count, int filament_id);
 
     friend class cereal::access;
@@ -1179,7 +1180,7 @@ public:
 
     void set_filament_count(int filament_count);
     void on_filament_deleted(int filament_count, int filament_id);
-    void on_filament_added(int filament_count);
+    void on_filament_added(int filament_count, size_t slot);
 
     std::map<int, bool> m_allow_bed_type_in_double_nozzle;
     BedTextureInfo bed_texture_info[btCount];

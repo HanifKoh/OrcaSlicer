@@ -102,6 +102,7 @@
 #include "libslic3r/MeshRepair.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
+#include "libslic3r/ParameterUtils.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -2527,6 +2528,7 @@ int CLI::run(int argc, char **argv)
 
     // More filaments loaded than the project has: the loaded count is the filament count, so the
     // per-filament arrays and the variant tables below are built for the loaded filaments too.
+    const int project_filament_count = filament_count;
     if (load_filament_count > filament_count)
         filament_count = load_filament_count;
 
@@ -4337,6 +4339,70 @@ int CLI::run(int argc, char **argv)
 
         sla_print_config.apply(m_print_config, true);
         m_print_config.apply(sla_print_config, true);*/
+    }
+
+    // The filaments loaded beyond a project's slots are physical, so with a mixed tail in the project they
+    // go ahead of it, as the GUI adds a filament: the mixed slots move to the end, and every list and
+    // reference that names a slot, the model's and the plates' included, follows. The command line
+    // options are in the load order too and are applied again later, so they move the same way.
+    if (project_filament_count > 0 && filament_count > project_filament_count && has_any_mixed_filament(loaded_mixed_flags)) {
+        const auto *is_mixed_opt = m_print_config.option<ConfigOptionBools>("filament_is_mixed");
+        const std::vector<unsigned char> is_mixed = is_mixed_opt != nullptr ? is_mixed_opt->values : std::vector<unsigned char>();
+        const auto mixed = [&is_mixed](size_t slot) { return slot < is_mixed.size() && is_mixed[slot]; };
+        std::vector<size_t> order;
+        for (const bool mixed_pass : { false, true })
+            for (size_t slot = 0; slot < static_cast<size_t>(filament_count); ++slot)
+                if (mixed(slot) == mixed_pass)
+                    order.push_back(slot);
+        std::map<int, int> moved;
+        for (size_t slot = 0; slot < order.size(); ++slot)
+            if (order[slot] != slot)
+                moved.emplace(static_cast<int>(order[slot]), static_cast<int>(slot));
+        if (!moved.empty()) {
+            BOOST_LOG_TRIVIAL(info) << filament_count << " filaments loaded onto a project of " << project_filament_count
+                                    << " with mixed slots: the mixed slots move behind the extra filaments";
+            reorder_filament_slots(m_print_config, order);
+            reorder_filament_slots(m_extra_config, order);
+            // The dev options hold a run of their own length per filament, so they are laid out again from
+            // the filaments in the new order, as the merge above laid them out when every slot was loaded.
+            std::vector<const DynamicPrintConfig *> slot_configs(order.size(), nullptr);
+            for (size_t index = 0; index < load_filaments_config.size(); ++index)
+                if (load_filaments_index[index] >= 1 && static_cast<size_t>(load_filaments_index[index]) <= order.size())
+                    slot_configs[load_filaments_index[index] - 1] = &load_filaments_config[index];
+            if (std::find(slot_configs.begin(), slot_configs.end(), nullptr) == slot_configs.end()) {
+                std::vector<const DynamicPrintConfig *> reordered;
+                for (const size_t slot : order)
+                    reordered.push_back(slot_configs[slot]);
+                set_filament_dev_options(m_print_config, reordered);
+            } else
+                BOOST_LOG_TRIVIAL(warning) << "a slot without a loaded filament keeps the filament_dev_* lists in the load order";
+            for (Model &model : m_models)
+                remap_model_filament_slots(model, moved);
+            // A plate's own maps and print sequences hold the project's slots: the extra ones get the slot
+            // defaults first, the way the GUI grows a plate, and then everything moves with its slot.
+            for (PlateData *plate : plate_data_src) {
+                for (const auto &[key, fill] : { std::pair<const char *, int>{ "filament_map", 1 }, { "filament_nozzle_map", 0 },
+                                                 { "filament_volume_map", static_cast<int>(NozzleVolumeType::nvtStandard) } })
+                    if (auto *map = plate->config.option<ConfigOptionInts>(key); map != nullptr && map->size() < order.size())
+                        map->values.resize(order.size(), fill);
+                const auto pad = [&order](std::vector<int> &filaments) {
+                    for (size_t filament = filaments.size(); filament < order.size(); ++filament)
+                        filaments.push_back(static_cast<int>(filament) + 1);
+                };
+                if (auto *first = plate->config.option<ConfigOptionInts>("first_layer_print_sequence"); first != nullptr && !first->values.empty() && first->values.front() != 0)
+                    pad(first->values);
+                auto *others = plate->config.option<ConfigOptionInts>("other_layers_print_sequence");
+                auto *groups = plate->config.option<ConfigOptionInt>("other_layers_print_sequence_nums");
+                if (others != nullptr && groups != nullptr) {
+                    std::vector<LayerPrintSequence> layers = get_other_layers_print_sequence(groups->value, others->values);
+                    for (LayerPrintSequence &layer : layers)
+                        pad(layer.second);
+                    if (!layers.empty())
+                        get_other_layers_print_sequence(layers, groups->value, others->values);
+                }
+                reorder_filament_slots(plate->config, order);
+            }
+        }
     }
 
     std::map<std::string, std::string> validity = m_print_config.validate(true);

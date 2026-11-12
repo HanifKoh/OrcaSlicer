@@ -28,7 +28,7 @@ each has its own rule.
 | Layer | Count owner | Sizing path | When it runs |
 |---|---|---|---|
 | Config (libslic3r) | `axis_counts()` reads extruders from `nozzle_diameter`, filaments from `filament_diameter`, variants from the variant lists | `DynamicPrintConfig::enforce_cardinality()` | `Preset::normalize` at load (plain per-filament options), `Print::apply` for the slice, the CLI after its filament merge |
-| Bundle (`PresetBundle`) | `num_filament_slots()` is the length of `filament_presets` | `set_num_filaments`, `insert_filament_slot`, `update_num_filaments`, the nozzle-count top-up | Whenever a slot is added, inserted or removed, and whenever the printer's nozzle count exceeds the physical slots |
+| Bundle (`PresetBundle`) | `num_filament_slots()` is the length of `filament_presets` | `set_num_filaments`, `insert_filament_slot`, `set_num_physical_filaments`, `update_num_filaments`, the nozzle-count top-up | Whenever a slot is added, inserted or removed, and whenever the printer's nozzle count exceeds the physical slots |
 
 The bundle produces `filament_diameter` with one entry per slot when it assembles the
 full config, so the config layer's filament count is the bundle's slot count by
@@ -77,7 +77,7 @@ nozzle of their own, sit at the tail. `num_physical_filaments()` is the slot cou
 minus the mixed flags. `filament_slot_mismatches()` lists the arrays whose length is
 not the slot count, and `filament_slots_consistent()` is true when it is empty.
 
-Three operations change the slot count. Growth goes through one private resize,
+Four operations change the slot count. Growth goes through one private resize,
 `resize_filament_slot_arrays`, that walks `filament_slot_keys()` and seeds every new
 entry; removal walks the same list and erases one entry from each array.
 
@@ -93,18 +93,24 @@ hold one value per slot whether or not the top-up then adds a slot:
   saved with, and the nozzle maps are not saved and start on their defaults.
 - The AMS sync sets the mixed tail aside, sizes the arrays to the synced physical
   slots, and puts the tail back behind them; a mixed slot keeps its volume and nozzle
-  maps and its mix settings.
+  maps and its mix settings. The sync records each mixed slot's move as a slot
+  relocation, so objects painted with a mix follow it to its new slot.
 
 A writer that sets one slot's value (the sidebar's colour picker, a combo's AMS colour,
 the global nozzle maps) writes into the slots the arrays hold and never resizes them.
 
 - `set_num_filaments(n, colour)` grows or shrinks at the raw tail. It is the right
-  call for a mixed slot (which belongs at the tail) and for plain growth without a
-  mixed tail.
+  call for a mixed slot (which belongs at the tail) and for plain growth or shrink
+  without a mixed tail. It refuses a shrink while there are mixed slots, because the
+  cut would take the mixes instead of filaments.
 - `insert_filament_slot(pos, colour)` adds one physical slot at `pos`, copying the
   preset of the slot before it, and returns the old-to-new index of every slot it
   pushed up. The sidebar inserts ahead of the mixed tail with it and re-points the
   model from the answer with `remap_model_filament_slots`.
+- `set_num_physical_filaments(n)` brings the physical filaments to `n` and keeps the
+  mixed tail last: growth inserts each slot ahead of the tail, a shrink removes the last
+  physical slots the way a delete removes one. The mixed slots move with the count, and
+  the moves are recorded like the top-up's.
 - `update_num_filaments(idx)` removes one slot and remaps the mixed components that
   referenced the slots behind it.
 
@@ -123,9 +129,13 @@ colour pickers, which index the bundle's arrays by slot before any slice sizes t
 back in step and logs the ones it repaired. The bundle's entry points that rewrite the
 slot arrays call it before they return: `load_selections`,
 `update_selections`, the project load (`load_config_file_config`), `sync_ams_list`,
-`reload_local_bundle` and `restore_selection`. The nozzle-count top-up calls it before it
-inserts, because the insertion keeps each array's values up to the colours' length and
-counts the mixed flags. On a consistent bundle it costs one length comparison per array.
+`reload_local_bundle` and `restore_selection`. The nozzle-count top-up,
+`set_num_physical_filaments`, `set_num_filaments`, `insert_filament_slot` and
+`update_num_filaments` call it before they insert or remove slots, because the
+insertion keeps each array's values up to the colours' length, the removal erases one value
+by position, and both count the mixed flags. `set_num_filaments`, `update_num_filaments`
+and `set_num_physical_filaments` end in the top-up, so its call also checks what they
+leave. On a consistent bundle it costs one length comparison per array.
 A bundle without selections has no slots and is left alone.
 
 The repair keeps every value an array has. An array does not say which slot a missing
@@ -163,17 +173,39 @@ every path, not only when the extruder count happened to change.
 
 When a mixed tail exists, the insertion moves the mixed slots up, and the model's
 extruder ids and paint states must follow. The bundle has no model, so it records the
-moves (`take_pending_slot_relocations()`), and the owner of the model applies them:
+moves (`take_pending_slot_relocations()`, old to new index, -1 for a slot
+`set_num_physical_filaments` removed), and the owner of the model applies them with
+`remap_model_filament_slots`. That follows every reference a model makes to a slot: the
+`extruder` and the feature and support filament options of objects, parts and height
+ranges, the painted facets and the plates' tool changes. For a removed slot, objects and
+parts on it go to the first filament, its paint is cleared, its support options are
+erased, a height range's `extruder` falls back to the default and its tool changes are
+dropped, as a delete without a replacement does. Only the feature filament ids go further
+than the GUI delete: the remap erases them, the delete leaves them. The owners are:
 `Plater::load_files` for a freshly parsed project, right after the published-3MF
-relocations; for the live model `GUI_App::load_current_presets`, the user-preset loads
-and the removal of a preset bundle, the plugin host's local bundle reload, the preset
-bundle dialog's reload when a bundle folder changes, the printer tab's extruder-count
-handler and page rebuild, the sidebar's add and delete, the AMS sync and the
-subscribed-bundle updates. A
+relocations, handing the plates' tool changes to the plater only after them; for the
+live model `GUI_App::load_current_presets`, the user-preset loads and the removal of a
+preset bundle, the plugin host's local bundle reload, the preset bundle dialog's reload
+when a bundle folder changes, the printer tab's extruder-count handler and page rebuild,
+the sidebar's add and delete, the AMS sync and the subscribed-bundle updates. A
 selection restore after a failed settings import puts the snapshot's slots back and
 drops the moves recorded in between. A surplus of physical slots when the nozzle count drops is
 still removed one slot at a time through the sidebar's delete, which renumbers the
 model as it goes.
+
+`Plater::sync_filament_slots_from_bundle` is the GUI's side of a change the bundle made
+on its own: it takes the recorded moves, removes the plates' map entries of the removed
+slots, re-points the model, and gives each slot the bundle added a plate map entry at
+its own position (`PartPlate::on_filament_added(slot)`, through
+`insert_plate_filament_slot`), so a mixed slot keeps the per-plate filament, nozzle and
+volume map it had.
+
+A geometry-only import (a 3MF without settings, or one whose settings are skipped, and a
+Prusa project) names the filaments of its source by extruder id, and those are physical:
+no mixed definition comes with it. `Plater::load_files` grows the project's physical
+filaments to the highest id the imported objects use with `set_num_physical_filaments`,
+so an id that named one of the project's mixed slots names a filament of its own
+afterwards, and the objects already in the project follow the mixes they use.
 
 ## The flush matrix
 
@@ -199,6 +231,19 @@ assembled. A model given several filaments but no colours gets the default colou
 the first pass, so its matrix is computed for those filaments, as the GUI does for a new
 project.
 
+A project with mixed slots given more `--load-filaments` than it has slots takes the
+extra filaments as physical ones, ahead of the mixed tail, as the GUI adds a filament.
+The CLI assembles the config in load order first, with the extra filaments at the end,
+and then moves the mixed slots behind them with `reorder_filament_slots`: every
+per-filament list moves with its slot (the variant-expanded ones by
+`filament_self_index`, the preset columns, the flush matrix and vector), and the mixed
+components, the feature filament ids and a plate's print sequences follow the filaments
+they name. A list it cannot lay out is left in place and logged. The `filament_dev_*`
+lists hold a run of their own length per filament, so the CLI lays them out again from
+the filament configs in the new order. The command line options, the plates' own maps
+and print sequences and the model (`remap_model_filament_slots`) move the same way. The
+extra filaments therefore print with the tool numbers of the slots ahead of the mixes.
+
 ## Tests
 
 - `[Cardinality]` (`tests/libslic3r/test_printconfigcardinality.cpp`): the
@@ -209,17 +254,30 @@ project.
   follows the preset list through growth, shrink, insert and delete; the top-up grows
   the arrays with the list, inserts ahead of the mixed tail and reports the move; a
   single-extruder multi-material printer keeps the slots it has; new slots draw from the
-  palette; a bundle without selections keeps its default colour; the flush matrix
-  resize keeps the pairs and nozzles the old layout had; the normaliser reports each
-  array out of step, seeds what is missing, keeps the mixed tail last and counts its
-  repairs; the selection load, the project load and the AMS sync leave it nothing to
+  palette; a bundle without selections keeps its default colour; the flush matrix resize
+  keeps the pairs and nozzles the old layout had; the normaliser reports each array out
+  of step, seeds what is missing, keeps the mixed tail last and counts its repairs; the
+  selection load, the project load, the AMS sync, the top-up's insertion ahead of the
+  mixed tail, a delete, the physical count call and a refused shrink leave it nothing to
   repair, and a sync with a mix behind a High Flow slot keeps every slot's values on
-  that slot.
+  that slot; the physical count grows and shrinks with the mixed tail last and the model
+  following, and puts a value missing from an array ahead of the tail first; an imported
+  object naming a mixed slot gets a filament of its own; a shrink across the mixed tail
+  is refused; a plate's maps take an inserted slot at its position; moving or removing a
+  slot re-points every reference the model makes to it; the CLI's reorder moves every
+  per-filament value and renumbers the references and a plate's print sequences.
 - `[FilamentMixer]` and `[Published]` (`tests/libslic3r/test_preset_bundle_loading.cpp`):
   the mixed-slot and published-3MF flows on top of the same operations.
 - `[FilamentSlots]` in the same file: a loaded project, a restored selection and an AMS
-  sync hold one value per slot in every array without the top-up adding a slot.
+  sync hold one value per slot in every array without the top-up adding a slot, and an
+  AMS sync that changes the slot count with a mix present leaves the normaliser nothing
+  to repair.
 - `cli_short_palette` (`tests/cli/test_cli_short_palette.sh`): a two-filament project
   carrying one colour and a three-filament matrix slices on the CLI and exports one
   colour per filament with the matrix pairs it had; a one-filament project given two
   filaments slices with two.
+- `cli_mixed_overload` (`tests/cli/test_cli_mixed_overload.sh`): a project of two
+  filaments and a mix, naming the mix by the cube's extruder, object and part feature
+  filaments, a height range and the plate's first-layer order, given a fourth filament
+  exports the extra filament in the third slot and the mix in the fourth with every
+  reference on it, and the per-filament lists of the same layout loaded directly.

@@ -4522,7 +4522,14 @@ void PresetBundle::normalize_filament_slots()
 void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 {
     assert(m_pending_slot_relocations.empty());
+    // The resize counts the old slots from the colours and works on each array by position.
+    normalize_filament_slots();
     const size_t old_filament_count = this->filament_presets.size();
+    if (n < old_filament_count && num_mixed_filaments() > 0) {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": refused to cut " << old_filament_count << " slots to " << n
+                                   << " across the mixed tail";
+        return;
+    }
     if (n > old_filament_count && old_filament_count != 0)
         filament_presets.resize(n, filament_presets.back());
     else
@@ -4533,6 +4540,7 @@ void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 
 std::map<int, int> PresetBundle::insert_filament_slot(size_t pos, const std::string &colour)
 {
+    normalize_filament_slots();
     const size_t n = num_filament_slots();
     pos            = std::min(pos, n);
     filament_presets.insert(filament_presets.begin() + pos,
@@ -4562,7 +4570,7 @@ std::map<int, int> PresetBundle::take_pending_slot_relocations()
 }
 
 // Record `moved` (current -> new index) on top of the moves already pending, so the record keeps
-// mapping each slot's original index to where it is now.
+// mapping each slot's original index to where it is now. A removed slot (-1) is never current.
 static void compose_slot_relocations(std::map<int, int> &pending, const std::map<int, int> &moved)
 {
     std::map<int, int> composed = pending;
@@ -4580,10 +4588,16 @@ static void compose_slot_relocations(std::map<int, int> &pending, const std::map
 
 void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
 {
-    unsigned old_filament_count = this->filament_presets.size();
-    assert(to_del_flament_id < old_filament_count);
+    assert(to_del_flament_id < this->filament_presets.size());
     // A recorded move is in the current numbering; the owner applies it before the slots change again.
     assert(m_pending_slot_relocations.empty());
+    normalize_filament_slots();
+    erase_filament_slot(to_del_flament_id);
+    update_multi_material_filament_presets();
+}
+
+void PresetBundle::erase_filament_slot(size_t to_del_flament_id)
+{
     filament_presets.erase(filament_presets.begin() + to_del_flament_id);
 
     // update edited_preset
@@ -4611,7 +4625,7 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
                                     || !is_mixed_opt->values[to_del_flament_id]);
             if (del_is_physical)
                 remap_mixed_components_on_delete(is_mixed_opt->values, comp_opt->values,
-                                                 to_del_flament_id + 1);
+                                                 static_cast<unsigned int>(to_del_flament_id + 1));
         }
     }
 
@@ -4628,6 +4642,38 @@ void PresetBundle::update_num_filaments(unsigned int to_del_flament_id)
     // Shift the matrix while the count still reflects the deletion: a top-up that puts a slot
     // back would otherwise leave the deleted filament's rows in place.
     resize_flush_volumes_matrix(project_config, filament_presets.size(), get_printer_extruder_count(), to_del_flament_id);
+}
+
+void PresetBundle::insert_physical_filament_slots(size_t n, const std::vector<std::string> &saved_colours)
+{
+    while (num_physical_filaments() < n && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax)) {
+        const size_t pos    = num_physical_filaments();
+        const bool   at_end = pos == num_filament_slots() && pos < saved_colours.size();
+        compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(pos, at_end ? saved_colours[pos] : std::string()));
+    }
+}
+
+void PresetBundle::set_num_physical_filaments(size_t n)
+{
+    // The insertion and the removal below count the mixed flags and work on each array by position, so
+    // they need the arrays in step, as the top-up does.
+    normalize_filament_slots();
+    n                     = std::max<size_t>(n, 1);
+    const size_t physical = num_physical_filaments();
+    if (n > physical) {
+        insert_physical_filament_slots(n, {});
+    } else if (n < physical) {
+        // A recorded move is in the current numbering; the owner applies it before the slots change again.
+        assert(m_pending_slot_relocations.empty());
+        // The last physical slots go, and the mixed tail moves down behind the ones that stay.
+        const size_t       removed = physical - n;
+        std::map<int, int> moved;
+        for (size_t slot = n; slot < num_filament_slots(); ++slot)
+            moved.emplace(static_cast<int>(slot), slot < physical ? -1 : static_cast<int>(slot - removed));
+        compose_slot_relocations(m_pending_slot_relocations, moved);
+        for (size_t slot = physical; slot-- > n;)
+            erase_filament_slot(slot);
+    }
     update_multi_material_filament_presets();
 }
 
@@ -4898,6 +4944,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         std::string color_type;
         int         volume_map = static_cast<int>(NozzleVolumeType::nvtStandard);
         int         nozzle_map = 0;
+        size_t      slot = 0;
         std::string mixed_components;
         std::string mixed_sublayer_ratios;
         bool        mixed_gradient = false;
@@ -4918,6 +4965,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             if (!is_mixed_opt->values[i])
                 continue;
             MixedSlotSnapshot snap;
+            snap.slot       = i;
             snap.preset     = this->filament_presets[i];
             snap.color      = (i < filament_color->values.size())      ? filament_color->values[i]      : "";
             snap.color_type = (i < filament_color_type->values.size()) ? filament_color_type->values[i] : "";
@@ -5234,7 +5282,9 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         if (mixed_grad_curve_opt) mixed_grad_curve_opt->values.resize(new_phys_count);
         if (mixed_per_part_opt)   mixed_per_part_opt->values.resize(new_phys_count, (unsigned char)false);
 
+        std::map<int, int> moved;
         for (auto& snap : mixed_snapshots) {
+            moved.emplace(static_cast<int>(snap.slot), static_cast<int>(this->filament_presets.size()));
             this->filament_presets.push_back(snap.preset);
             filament_color->values.push_back(snap.color);
             filament_color_type->values.push_back(snap.color_type);
@@ -5250,6 +5300,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             if (mixed_grad_curve_opt) mixed_grad_curve_opt->values.push_back(snap.mixed_gradient_curve);
             if (mixed_per_part_opt)   mixed_per_part_opt->values.push_back((unsigned char)snap.mixed_gradient_per_part);
         }
+        compose_slot_relocations(m_pending_slot_relocations, moved);
     }
 
     // Update ams_multi_color_filment
@@ -8752,11 +8803,7 @@ void PresetBundle::update_multi_material_filament_presets(const std::vector<std:
         } else {
             // Each missing slot goes just ahead of the mixed tail, whichever count rule applies. A slot added at
             // the end takes the colour saved for it, if any.
-            for (size_t missing = min_filaments - slots_counted; missing > 0 && num_filament_slots() < size_t(EnforcerBlockerType::ExtruderMax); --missing) {
-                const size_t pos    = num_physical_filaments();
-                const bool   at_end = pos == num_filament_slots() && pos < saved_colours.size();
-                compose_slot_relocations(m_pending_slot_relocations, insert_filament_slot(pos, at_end ? saved_colours[pos] : std::string()));
-            }
+            insert_physical_filament_slots(num_physical_filaments() + (min_filaments - slots_counted), saved_colours);
         }
         num_filaments = this->filament_presets.size();
     }

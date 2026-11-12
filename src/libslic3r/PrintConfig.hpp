@@ -1043,6 +1043,22 @@ void resize_mixed_filament_metadata(DynamicPrintConfig &config, size_t old_slot_
 // to_delete_filament_id is the slot the old layout had and the new one lacks, or size_t(-1) for none.
 void resize_flush_volumes_matrix(DynamicPrintConfig &config, size_t num_filaments, size_t nozzle_nums, size_t to_delete_filament_id = size_t(-1));
 
+// A plate's own filament maps hold one value per filament slot. Inserts a new slot at pos (at the end of
+// a shorter map) with the slot defaults - the first extruder in filament_map, nozzle 0 in
+// filament_nozzle_map and volume_type in filament_volume_map - so every slot keeps its own values.
+// A map the plate does not have stays absent.
+void insert_plate_filament_slot(DynamicPrintConfig &plate_config, size_t pos, int volume_type);
+
+// Reorders the filament slots of a print config: slot i of the result is slot order[i] of the config,
+// order naming every slot once. Each per-filament value moves with its slot - the per-filament options,
+// the variant-expanded ones by filament_self_index, the preset names, ids and conditions, the preset
+// columns (the process, one per filament, the printer) and the flush matrix and vector - and the
+// options naming a filament by its 1-based id, the mixed components, the feature filaments and a
+// plate's print sequences, follow it. A list whose length does not fit the slot count is left as it is
+// and logged. The filament_dev_* lists hold runs of their own length per filament: the caller lays
+// them out again from the filament configs with set_filament_dev_options.
+void reorder_filament_slots(DynamicPrintConfig &config, const std::vector<size_t> &order);
+
 extern void update_static_print_config_from_dynamic(ConfigBase& config, const DynamicPrintConfig& dest_config, std::vector<int> variant_index, std::set<std::string>& key_set1, int stride = 1);
 extern void compute_filament_override_value(const std::string& opt_key, const ConfigOption *opt_old_machine, const ConfigOption *opt_new_machine, const ConfigOption *opt_new_filament, const DynamicPrintConfig& new_full_config,
     t_config_option_keys& diff_keys, DynamicPrintConfig& filament_overrides, std::vector<int>& f_map_indices);
