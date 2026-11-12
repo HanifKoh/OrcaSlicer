@@ -5881,6 +5881,102 @@ TEST_CASE("An unnamed spool between loaded AMS slots keeps the project filament 
     CHECK(colours[3] == "#FFFFFF");
 }
 
+// An AMS sync rewrites the physical slots from the trays and keeps the mixed tail behind them. Every
+// slot array, the nozzle maps included, ends with one value per slot whether the sync keeps the
+// physical count or adds a slot. The physical slots that were there keep their nozzle maps, a slot
+// the sync adds starts on the defaults, and the mix keeps its volume and nozzle maps.
+TEST_CASE("An AMS sync keeps every slot array in step with the slots", "[Preset][Bundle][AMS][FilamentSlots]")
+{
+    PresetBundle bundle;
+    Preset &pla     = add_inmemory_preset(bundle.filaments, "System PLA");
+    pla.is_system   = true;
+    pla.filament_id = "GFA00";
+
+    // Two physical filaments and a mix of them.
+    bundle.set_num_filaments(3u, std::string("#111111"));
+    bundle.filament_presets.assign(3, "System PLA");
+    DynamicPrintConfig &project = bundle.project_config;
+    project.option<ConfigOptionStrings>("filament_colour")->values           = { "#111111", "#222222", "#888888" };
+    project.option<ConfigOptionBools>("filament_is_mixed")->values           = { false, false, true };
+    project.option<ConfigOptionStrings>("filament_mixed_components")->values = { "", "", "1,2" };
+    project.option<ConfigOptionInts>("filament_map")->values                 = { 2, 2, 2 };
+    project.option<ConfigOptionInts>("filament_nozzle_map")->values          = { 5, 6, 7 };
+    project.option<ConfigOptionInts>("filament_volume_map")->values          = { 1, 1, 1 };
+    REQUIRE(bundle.filament_slots_consistent());
+
+    // A tray without a colour is an empty slot.
+    auto add_tray = [&bundle](int slot, const std::string &colour) {
+        DynamicPrintConfig tray;
+        tray.set_key_value("filament_id", new ConfigOptionStrings{ colour.empty() ? "" : "GFA00" });
+        tray.set_key_value("filament_colour", new ConfigOptionStrings{ colour });
+        tray.set_key_value("filament_colour_type", new ConfigOptionStrings{ "1" });
+        tray.set_key_value("filament_multi_colour", new ConfigOptionStrings{});
+        tray.set_key_value("filament_type", new ConfigOptionStrings{ colour.empty() ? "" : "PLA" });
+        tray.set_key_value("ams_id", new ConfigOptionStrings{ "0" });
+        tray.set_key_value("slot_id", new ConfigOptionStrings{ std::to_string(slot) });
+        tray.set_key_value("filament_slot_placeholder", new ConfigOptionBools{ colour.empty() });
+        bundle.filament_ams_list.emplace(slot, std::move(tray));
+    };
+    std::vector<std::pair<DynamicPrintConfig *, std::string>> unknowns;
+    MergeFilamentInfo                                         merge_info;
+
+    // colours lists every slot after the sync, the mix last.
+    const auto check_synced = [&bundle, &project](const std::vector<std::string> &colours) {
+        const size_t slots = colours.size();
+        CHECK(bundle.filament_slots_consistent());
+        CHECK(bundle.num_filament_slots() == slots);
+        CHECK(bundle.num_physical_filaments() == slots - 1);
+        CHECK(bundle.is_mixed_filament(slots - 1));
+        CHECK(project.option<ConfigOptionStrings>("filament_mixed_components")->values.back() == "1,2");
+        CHECK(project.option<ConfigOptionStrings>("filament_colour")->values == colours);
+        CHECK(project.option<ConfigOptionStrings>("filament_multi_colour")->values == colours);
+        const auto ints = [&project](const char *key) { return project.option<ConfigOptionInts>(key)->values; };
+        CHECK(ints("filament_map")[1] == 2);
+        CHECK(ints("filament_nozzle_map")[1] == 6);
+        CHECK(ints("filament_volume_map")[1] == 1);
+        // A physical slot the sync adds starts on the default maps; the mix keeps its own.
+        for (size_t slot = 2; slot + 1 < slots; ++slot) {
+            CAPTURE(slot);
+            CHECK(ints("filament_nozzle_map").at(slot) == 0);
+            CHECK(ints("filament_volume_map").at(slot) == static_cast<int>(NozzleVolumeType::nvtStandard));
+        }
+        CHECK(ints("filament_nozzle_map").back() == 7);
+        CHECK(ints("filament_volume_map").back() == 1);
+    };
+
+    SECTION("overwriting the project with as many trays as physical slots") {
+        add_tray(0, "#A00000");
+        add_tray(1, "#00A000");
+        std::map<int, AMSMapInfo> maps;
+        REQUIRE(bundle.sync_ams_list(unknowns, false, maps, false, merge_info) == 3);
+        check_synced({ "#A00000", "#00A000", "#888888" });
+    }
+    SECTION("overwriting the project with three loaded trays") {
+        add_tray(0, "#A00000");
+        add_tray(1, "#00A000");
+        add_tray(2, "#0000A0");
+        std::map<int, AMSMapInfo> maps;
+        REQUIRE(bundle.sync_ams_list(unknowns, false, maps, false, merge_info) == 4);
+        check_synced({ "#A00000", "#00A000", "#0000A0", "#888888" });
+    }
+    SECTION("overwriting the project around an empty tray") {
+        add_tray(0, "#A00000");
+        add_tray(1, "");
+        add_tray(2, "#0000A0");
+        std::map<int, AMSMapInfo> maps;
+        REQUIRE(bundle.sync_ams_list(unknowns, false, maps, false, merge_info) == 4);
+        check_synced({ "#A00000", "#222222", "#0000A0", "#888888" });
+    }
+    SECTION("mapping the project to two trays and appending the third") {
+        add_tray(0, "#A00000");
+        add_tray(1, "#00A000");
+        add_tray(2, "#0000A0");
+        std::map<int, AMSMapInfo> maps{ { 0, { "0", "0" } }, { 1, { "0", "1" } } };
+        REQUIRE(bundle.sync_ams_list(unknowns, true, maps, true, merge_info) == 4);
+        check_synced({ "#A00000", "#00A000", "#0000A0", "#888888" });
+    }
+}
+
 TEST_CASE("Loading incomplete mixed metadata normalizes slots before adding a filament", "[Preset][Bundle][FilamentMixer]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
@@ -6214,6 +6310,56 @@ TEST_CASE("The top-up keeps the colours a short saved selection lists for the sl
         REQUIRE(bundle.filament_presets.size() == 4);
         CHECK(bundle.filament_slots_consistent());
         CHECK(bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values == saved);
+    }
+}
+
+// The app config keeps a printer's colour packs at the length they were written with, and an empty
+// list as an empty string. A restored selection holds one colour pack per filament either way, and
+// one AMS colour list per filament, without a top-up adding a slot.
+TEST_CASE("A restored selection holds one colour pack per filament", "[Preset][Bundle][FilamentSlots]")
+{
+    const bool on_startup = GENERATE(true, false);
+    CAPTURE(on_startup);
+
+    AppConfig app_config;
+    {
+        PresetBundle bundle;
+        add_inmemory_preset(bundle.printers, "Test Printer");
+        bundle.printers.select_preset_by_name("Test Printer", true);
+        add_inmemory_preset(bundle.filaments, "Test Filament");
+        bundle.filaments.select_preset_by_name("Test Filament", true);
+        bundle.set_num_filaments(3u, std::string("#111111"));
+        bundle.filament_presets.assign(3, "Test Filament");
+        bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values = { "#111111", "#222222", "#333333" };
+        bundle.export_selections(app_config);
+    }
+
+    PresetBundle bundle;
+    add_inmemory_preset(bundle.printers, "Test Printer");
+    add_inmemory_preset(bundle.filaments, "Test Filament");
+    const auto restore = [&]() {
+        if (on_startup) {
+            bundle.load_selections(app_config);
+        } else {
+            // The printer the switch comes from ran five filaments, three of them from the AMS.
+            bundle.set_num_filaments(5u, std::string("#FF0000"));
+            bundle.ams_multi_color_filment.assign(5, { "#FF0000" });
+            bundle.printers.select_preset_by_name("Test Printer", true);
+            bundle.update_selections(app_config);
+        }
+        REQUIRE(bundle.num_filament_slots() == 3);
+        CHECK(bundle.take_pending_slot_relocations().empty());
+        CHECK(bundle.filament_slots_consistent());
+        return bundle.project_config.option<ConfigOptionStrings>("filament_multi_colour")->values;
+    };
+
+    SECTION("colour packs saved for more filaments than the list names") {
+        app_config.set_printer_setting("Test Printer", "filament_multi_colors", "#111111 #AAAAAA,#222222,#333333,#444444");
+        CHECK(restore() == std::vector<std::string>{ "#111111 #AAAAAA", "#222222", "#333333" });
+    }
+    SECTION("an empty colour-pack list") {
+        app_config.set_printer_setting("Test Printer", "filament_multi_colors", "");
+        CHECK(restore() == std::vector<std::string>{ "#111111", "#222222", "#333333" });
     }
 }
 
@@ -8098,6 +8244,41 @@ TEST_CASE("A multi-toolhead project saved without filament self indices loads ev
     REQUIRE_NOTHROW(bundle.load_config_model("test.3mf", std::move(config)));
     CHECK(bundle.filament_presets.size() == colors.size());
     CHECK(bundle.project_config.opt<ConfigOptionStrings>("filament_colour")->values == colors);
+}
+
+// A project file carries its per-slot arrays at the lengths it wrote them with. Loading it sizes every
+// slot array to the project's filaments, keeping the values the file has for them, without a top-up
+// adding a slot; the AMS colour lists of the project before do not outnumber the new slots.
+TEST_CASE("A loaded project holds one value per filament in every slot array", "[Preset][Bundle][FilamentSlots]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.opt<ConfigOptionStrings>("filament_colour")->values       = { "#FF0000", "#00FF00", "#0000FF" };
+    config.opt<ConfigOptionFloats>("filament_diameter")->values      = { 1.75, 1.75, 1.75 };
+    config.option<ConfigOptionStrings>("filament_colour_type", true)->values  = { "2" };
+    config.option<ConfigOptionStrings>("filament_multi_colour", true)->values = { "#FF0000 #FFFFFF", "#00FF00", "#0000FF", "#123456", "#654321" };
+    config.option<ConfigOptionInts>("filament_map", true)->values             = { 2, 2 };
+    config.option<ConfigOptionInts>("filament_volume_map", true)->values      = { 1 };
+    config.option<ConfigOptionInts>("filament_nozzle_map", true)->values      = { 3, 3, 3, 3 };
+    Preset::normalize(config);
+
+    PresetBundle bundle;
+    // The project open before ran five filaments from the AMS.
+    bundle.set_num_filaments(5u, std::string("#111111"));
+    bundle.ams_multi_color_filment.assign(5, { "#111111" });
+    bundle.load_config_model("test.3mf", std::move(config));
+
+    REQUIRE(bundle.num_filament_slots() == 3);
+    CHECK(bundle.take_pending_slot_relocations().empty());
+    CHECK(bundle.filament_slots_consistent());
+    const auto strings  = [&bundle](const char *key) { return bundle.project_config.opt<ConfigOptionStrings>(key)->values; };
+    const auto ints     = [&bundle](const char *key) { return bundle.project_config.opt<ConfigOptionInts>(key)->values; };
+    const int  standard = static_cast<int>(NozzleVolumeType::nvtStandard);
+    CHECK(strings("filament_colour") == std::vector<std::string>{ "#FF0000", "#00FF00", "#0000FF" });
+    CHECK(strings("filament_colour_type") == std::vector<std::string>{ "2", "1", "1" });
+    CHECK(strings("filament_multi_colour") == std::vector<std::string>{ "#FF0000 #FFFFFF", "#00FF00", "#0000FF" });
+    CHECK(ints("filament_map") == std::vector<int>{ 2, 2, 1 });
+    CHECK(ints("filament_volume_map") == std::vector<int>{ 1, standard, standard });
+    CHECK(ints("filament_nozzle_map") == std::vector<int>{ 3, 3, 3 });
 }
 
 TEST_CASE("A project with fewer filaments than tools fills every filament slot", "[Preset][Bundle][Regression]")

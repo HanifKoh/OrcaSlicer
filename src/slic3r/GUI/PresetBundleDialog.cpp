@@ -3,6 +3,7 @@
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include <atomic>
+#include <cstddef>
 #include <boost/chrono/duration.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem/operations.hpp>
@@ -28,6 +29,7 @@
 #include <libslic3r/PresetBundle.hpp>
 #include <wx/string.h>
 #include "MainFrame.hpp"
+#include "Plater.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include <miniz.h>
 #include <OrcaCloudServiceAgent.hpp>
@@ -71,7 +73,13 @@ PresetBundleDialog::~PresetBundleDialog()
 
 void PresetBundleDialog::OnFSWatch(wxFileSystemWatcherEvent& e)
 {
-    GUI::wxGetApp().preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSilentDisableSystem);
+    PresetBundle* bundle       = GUI::wxGetApp().preset_bundle;
+    const size_t  slots_before = bundle->num_filament_slots();
+    bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSilentDisableSystem);
+    // The reload restores the selection and tops it up to the printer's nozzle count, which can move
+    // the mixed slots up.
+    if (Plater* plater = wxGetApp().plater())
+        plater->sync_filament_slots_from_bundle(slots_before);
     wxGetApp().mainframe->update_side_preset_ui();
 
     // ListBundles();

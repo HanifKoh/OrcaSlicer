@@ -3968,10 +3968,11 @@ void PresetBundle::update_selections(AppConfig &config)
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
+    // An empty list is saved as an empty string, which holds no colour pack rather than one empty pack.
     std::vector<std::string> multi_filament_colors;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_multi_colors")) {
-        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
-    }
+    if (const std::string saved_multi_colors = config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors");
+        !saved_multi_colors.empty())
+        boost::algorithm::split(multi_filament_colors, saved_multi_colors, boost::algorithm::is_any_of(","));
     if (multi_filament_colors.size() == 0) project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = filament_colors;
     else project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = multi_filament_colors;
 
@@ -4016,6 +4017,10 @@ void PresetBundle::update_selections(AppConfig &config)
     // No global fallback here: on a printer change the legacy shared keys describe another
     // printer's filament list, so absent per-printer keys must clear the mixes, not revive them.
     load_mixed_filament_settings(project_config, config, initial_printer_profile_name, filament_presets.size(), false);
+    // The colour packs come back at the length they were saved with and the AMS colour lists at the
+    // previous selection's: size every slot array to the restored list, whether or not the top-up below
+    // adds a slot.
+    resize_filament_slot_arrays(filament_presets.size(), std::string());
 
     // Update visibility of presets based on their compatibility with the active printer.
     // Always try to select a compatible print and filament preset to the current printer preset,
@@ -4131,10 +4136,11 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     filament_colors.resize(filament_presets.size(), "#26A69A");
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
+    // An empty list is saved as an empty string, which holds no colour pack rather than one empty pack.
     std::vector<std::string> multi_filament_colors;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_multi_colors")) {
-        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
-    }
+    if (const std::string saved_multi_colors = config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors");
+        !saved_multi_colors.empty())
+        boost::algorithm::split(multi_filament_colors, saved_multi_colors, boost::algorithm::is_any_of(","));
     if (multi_filament_colors.size() == 0) project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = filament_colors;
     else project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = multi_filament_colors;
 
@@ -4177,6 +4183,10 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
         project_config.option<ConfigOptionFloats>("flush_multiplier")->values = std::vector<double>(flush_multipliers.begin(), flush_multipliers.end());
     }
     load_mixed_filament_settings(project_config, config, initial_printer_profile_name, filament_presets.size(), true);
+    // The colour packs come back at the length they were saved with and the AMS colour lists at the
+    // previous selection's: size every slot array to the restored list, whether or not the top-up below
+    // adds a slot.
+    resize_filament_slot_arrays(filament_presets.size(), std::string());
 
     // Update visibility of presets based on their compatibility with the active printer.
     // Always try to select a compatible print and filament preset to the current printer preset,
@@ -4806,6 +4816,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
     ConfigOptionStrings *filament_color_type = project_config.option<ConfigOptionStrings>("filament_colour_type");
     ConfigOptionInts *   filament_map = project_config.option<ConfigOptionInts>("filament_map");
     ConfigOptionInts *   filament_volume_map = project_config.option<ConfigOptionInts>("filament_volume_map");
+    ConfigOptionInts *   filament_nozzle_map = project_config.option<ConfigOptionInts>("filament_nozzle_map");
     // Snapshot and temporarily strip mixed filament slots so AMS sync operates on physical
     // filaments only. A mixed slot is virtual and has no tray to sync against; leaving it in
     // would let AMS mapping overwrite it and would break the physical-first slot ordering the
@@ -4814,6 +4825,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         std::string preset;
         std::string color;
         std::string color_type;
+        int         volume_map = static_cast<int>(NozzleVolumeType::nvtStandard);
+        int         nozzle_map = 0;
         std::string mixed_components;
         std::string mixed_sublayer_ratios;
         bool        mixed_gradient = false;
@@ -4837,6 +4850,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             snap.preset     = this->filament_presets[i];
             snap.color      = (i < filament_color->values.size())      ? filament_color->values[i]      : "";
             snap.color_type = (i < filament_color_type->values.size()) ? filament_color_type->values[i] : "";
+            if (i < filament_volume_map->values.size()) snap.volume_map = filament_volume_map->values[i];
+            if (i < filament_nozzle_map->values.size()) snap.nozzle_map = filament_nozzle_map->values[i];
             if (mixed_comp_opt     && i < mixed_comp_opt->values.size())     snap.mixed_components      = mixed_comp_opt->values[i];
             if (mixed_ratios_opt   && i < mixed_ratios_opt->values.size())   snap.mixed_sublayer_ratios = mixed_ratios_opt->values[i];
             if (mixed_gradient_opt && i < mixed_gradient_opt->values.size()) snap.mixed_gradient        = mixed_gradient_opt->values[i];
@@ -4852,6 +4867,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color->values.resize(phys_count);
             filament_color_type->values.resize(phys_count);
             filament_map->values.resize(phys_count, 1);
+            filament_volume_map->values.resize(phys_count, static_cast<int>(NozzleVolumeType::nvtStandard));
+            filament_nozzle_map->values.resize(phys_count, 0);
             is_mixed_opt->values.resize(phys_count);
             if (mixed_comp_opt)       mixed_comp_opt->values.resize(phys_count);
             if (mixed_ratios_opt)     mixed_ratios_opt->values.resize(phys_count);
@@ -5053,8 +5070,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
         filament_color_type->values = exist_color_types;
         ams_multi_color_filment = exist_multi_color_filment;
         this->filament_presets = exist_filament_presets;
-        filament_map->values.resize(exist_filament_presets.size(), 1);
-        filament_volume_map->values.resize(exist_filament_presets.size(), static_cast<int>(NozzleVolumeType::nvtStandard));
+        // The other slot arrays follow the synced slots; a slot that was there keeps its values.
+        resize_filament_slot_arrays(this->filament_presets.size(), std::string());
     }
     else {//overwrite;
         bool has_placeholders = std::any_of(ams_infos.begin(), ams_infos.end(),
@@ -5112,8 +5129,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color_type->values = result_color_types;
             this->filament_presets      = result_presets;
             ams_multi_color_filment     = result_multi_colors;
-            filament_map->values.resize(total, 1);
-            filament_volume_map->values.resize(total, static_cast<int>(NozzleVolumeType::nvtStandard));
+            resize_filament_slot_arrays(this->filament_presets.size(), std::string());
         } else {
             // BBL: existing wholesale replace
             filament_color->values = ams_filament_colors;
@@ -5123,8 +5139,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             for (size_t i = 0; i < std::min(ams_filament_presets.size(), this->filament_presets.size()); i++)
                 ams_filament_presets[i] = synced_preset_name(this->filament_presets[i], ams_filament_presets[i]);
             this->filament_presets = ams_filament_presets;
-            filament_map->values.resize(ams_filament_colors.size(), 1);
-            filament_volume_map->values.resize(ams_filament_colors.size(), static_cast<int>(NozzleVolumeType::nvtStandard));
+            resize_filament_slot_arrays(this->filament_presets.size(), std::string());
         }
 
         auto& print_config = this->prints.get_edited_preset().config;
@@ -5154,6 +5169,8 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
             filament_color_type->values.push_back(snap.color_type);
             ams_multi_color_filment.push_back({snap.color});
             filament_map->values.push_back(1);
+            filament_volume_map->values.push_back(snap.volume_map);
+            filament_nozzle_map->values.push_back(snap.nozzle_map);
             if (is_mixed_opt)         is_mixed_opt->values.push_back((unsigned char)true);
             if (mixed_comp_opt)       mixed_comp_opt->values.push_back(snap.mixed_components);
             if (mixed_ratios_opt)     mixed_ratios_opt->values.push_back(snap.mixed_sublayer_ratios);
@@ -6511,9 +6528,13 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
         // Load the project config values. In published mode only the plate/bed geometry keys
         // cross over (the receiver must not inherit the author's filament/purge data).
         this->project_config.apply_only(config, is_published ? s_project_options_published : s_project_options);
-        // Older projects inherit one-element mixed defaults, regardless of their filament count.
-        if (!is_published)
+        if (!is_published) {
+            // Older projects inherit one-element mixed defaults, regardless of their filament count.
             resize_mixed_filament_metadata(this->project_config, num_filaments, num_filaments);
+            // The file writes each of the other slot arrays at its own length, and the AMS colour lists
+            // are the previous project's: one value per filament of this project in each.
+            resize_filament_slot_arrays(num_filaments, std::string());
+        }
 
         break;
     }

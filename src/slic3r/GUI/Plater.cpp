@@ -8860,52 +8860,18 @@ static void log_substitutions(const PresetsConfigSubstitutions& substitutions, c
         log_substitutions(preset.substitutions, source + " (preset " + preset.preset_name + ")");
 }
 
-// After the settings of a project or a G-code were loaded into the presets: size the per-filament project
-// lists to the loaded filament count, and drop state only a connected printer may set.
+// After the settings of a project or a G-code were loaded into the presets, which sizes every filament
+// slot array to the loaded filaments: give a slot whose colour pack is empty or does not start with its
+// colour that single colour, and drop state only a connected printer may set.
 static void sync_loaded_project_filament_config(DynamicConfig& proj_cfg)
 {
-    ConfigOptionStrings* filament_color = proj_cfg.opt<ConfigOptionStrings>("filament_colour");
-    if (filament_color) {
-        size_t filament_count = filament_color->size();
-
-        // Sync filament map
-        ConfigOptionInts* filament_map = proj_cfg.opt<ConfigOptionInts>("filament_map", true);
-        if (filament_map->size() != filament_count) {
-            filament_map->values.resize(filament_count, 1);
-        }
-
-        ConfigOptionInts* filament_nozzle_map = proj_cfg.opt<ConfigOptionInts>("filament_nozzle_map", true);
-        if (filament_nozzle_map->size() != filament_count) {
-            filament_nozzle_map->values.resize(filament_count, 0);
-        }
-
-        ConfigOptionInts* filament_volume_map = proj_cfg.opt<ConfigOptionInts>("filament_volume_map", true);
-        if (filament_volume_map->size() != filament_count) {
-            filament_volume_map->values.resize(filament_count, static_cast<int>(NozzleVolumeType::nvtStandard));
-        }
-
-        // Sync filament multi colour
-        ConfigOptionStrings* filament_multi_color = proj_cfg.opt<ConfigOptionStrings>("filament_multi_colour", true);
-        if (filament_multi_color->size() != filament_count) {
-            filament_multi_color->values.resize(filament_count);
-        }
-        // If there is no multi-color data or color is not match, use single color as default value
-        for (size_t i = 0; i < filament_count; i++) {
+    const ConfigOptionStrings* filament_color       = proj_cfg.opt<ConfigOptionStrings>("filament_colour");
+    ConfigOptionStrings*       filament_multi_color = proj_cfg.opt<ConfigOptionStrings>("filament_multi_colour");
+    if (filament_color && filament_multi_color) {
+        for (size_t i = 0; i < std::min(filament_color->size(), filament_multi_color->size()); i++) {
             std::vector<std::string> colors = Slic3r::split_string(filament_multi_color->values[i], ' ');
-            if (i >= filament_multi_color->values.size() || colors.empty() || colors[0] != filament_color->values[i] ) {
+            if (colors.empty() || colors[0] != filament_color->values[i])
                 filament_multi_color->values[i] = filament_color->values[i];
-            }
-        }
-        // Sync filament colour type
-        ConfigOptionStrings* filament_color_type = proj_cfg.opt<ConfigOptionStrings>("filament_colour_type", true);
-        if (filament_color_type && filament_color_type->size() != filament_count) {
-            filament_color_type->values.resize(filament_count);
-
-            for (size_t i = 0; i < filament_count; i++) {
-                if (i >= filament_color_type->values.size() || filament_color_type->values[i].empty()) {
-                    filament_color_type->values[i] = "1";
-                }
-            }
         }
     }
 
@@ -22416,17 +22382,19 @@ void Plater::set_global_filament_map_mode(FilamentMapMode mode)
     mode_ptr->value = mode;
 }
 
+// The global maps hold one value per filament slot: a map given to them sets the slots it covers and
+// never changes the slot count.
 void Plater::set_global_filament_map(const std::vector<int>& filament_map)
 {
-    auto& project_config = wxGetApp().preset_bundle->project_config;
-    project_config.option<ConfigOptionInts>("filament_map")->values = filament_map;
+    auto& slots = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_map")->values;
+    std::copy_n(filament_map.begin(), std::min(filament_map.size(), slots.size()), slots.begin());
     p->partplate_list.invalidate_exclusion_volume_previews();
 }
 
 void Plater::set_global_filament_volume_map(const std::vector<int>& filament_volume_map)
 {
-    auto& project_config = wxGetApp().preset_bundle->project_config;
-    project_config.option<ConfigOptionInts>("filament_volume_map")->values = filament_volume_map;
+    auto& slots = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map")->values;
+    std::copy_n(filament_volume_map.begin(), std::min(filament_volume_map.size(), slots.size()), slots.begin());
 }
 
 std::vector<int> Plater::get_global_filament_map() const
