@@ -1,0 +1,120 @@
+# Nightly AddressSanitizer run of the tests that feed the slicer configs whose per-N arrays have the wrong
+# length. An out-of-bounds read that does not crash passes in a plain build, so these run here with ASan:
+#   - the full mismatch sweep ([MismatchSweepFull], hidden from the per-build unit tests because it slices
+#     about a thousand configs), with the libslic3r and fff_print suites it builds on;
+#   - the CLI tests (RequiresApp), which the per-build unit-test job cannot run because it receives only
+#     build/tests, and which cover the CLI's own config assembly before Print::apply.
+# Built from the default branch against its cached dependencies. Nothing here gates a build or a PR.
+name: Sanitizer Nightly
+
+on:
+  schedule:
+    # after build_all.yml's 02:15 UTC run has saved the deps cache
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asan:
+    name: AddressSanitizer tests
+    # Don't run scheduled checks on forks
+    if: github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      # LeakSanitizer reports the process-lifetime singletons; this job looks for memory errors. Built with
+      # -fsanitize-recover=address, a run reports every error and goes on, so one bad read does not hide the
+      # cases behind it; the steps fail on any report in their log.
+      ASAN_OPTIONS: detect_leaks=0:halt_on_error=0:symbolize=1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: 'false'
+
+      # The newest Linux deps build_all.yml saved. An older one only costs a configure error
+      # when deps/ changed in a way the slicer needs; the next build_all run saves a new one.
+      - name: Restore cached deps
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-clang-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+          restore-keys: linux-clang-cache-orcaslicer_deps-build-
+          fail-on-cache-miss: true
+
+      - name: Apt-Install Dependencies
+        uses: ./.github/actions/apt-install-deps
+
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.3.0"  # use most recent 4.3.x version
+
+      # Its own leg, so the instrumented objects never mix with the per-build cache.
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: Linux-amd64-asan
+          max-size: 3G
+
+      - name: Find the symbolizer
+        run: |
+          symbolizer=$(command -v llvm-symbolizer || ls /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
+          [ -n "$symbolizer" ] && echo "ASAN_SYMBOLIZER_PATH=$symbolizer" >> "$GITHUB_ENV" || echo "::warning::no llvm-symbolizer, stacks will be raw addresses"
+
+      # DEP_BUILD_DIR is named outright: CMake would otherwise look for the dependencies in deps/build-asan.
+      - name: Configure with AddressSanitizer
+        run: >
+          cmake -S . -B build-asan -G "Ninja Multi-Config"
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DSLIC3R_ASAN=ON -DSLIC3R_PCH=OFF -DBUILD_TESTS=ON
+          "-DCMAKE_C_FLAGS=-gline-tables-only -fsanitize-recover=address"
+          "-DCMAKE_CXX_FLAGS=-gline-tables-only -fsanitize-recover=address"
+          -DDEP_BUILD_DIR=${{ github.workspace }}/deps/build
+
+      # An instrumented translation unit takes about twice the memory of a plain one.
+      - name: Build the test suites
+        run: cmake --build build-asan --config Release --target libslic3r_tests fff_print_tests -j 3
+
+      - name: Run the full mismatch sweep
+        run: |
+          set -o pipefail
+          status=0
+          build-asan/tests/fff_print/Release/fff_print_tests "[MismatchSweepFull]" 2>&1 | tee asan-sweep.log || status=1
+          if grep -q "ERROR: AddressSanitizer" asan-sweep.log; then echo "::error::AddressSanitizer reports in the sweep, see asan-sweep.log"; status=1; fi
+          exit $status
+
+      - name: Run the libslic3r and fff_print suites
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for suite in libslic3r fff_print; do
+            ctest --test-dir build-asan/tests/$suite -C Release -LE NotWorking --output-on-failure -j 2 || status=1
+            log=build-asan/tests/$suite/Testing/Temporary/LastTest.log
+            if grep -q "ERROR: AddressSanitizer" "$log"; then echo "::error::AddressSanitizer reports in $suite, see $log"; status=1; fi
+          done
+          exit $status
+
+      - name: Build the slicer
+        if: ${{ !cancelled() }}
+        run: cmake --build build-asan --config Release --target OrcaSlicer -j 3
+
+      # The scripts judge the slicer by its exit code, so an error report ends the run here.
+      - name: Run the CLI tests
+        if: ${{ !cancelled() }}
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:symbolize=1
+        run: ctest --test-dir build-asan/tests -C Release -L RequiresApp --output-on-failure
+
+      - name: Upload test logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sanitizer-nightly-logs
+          path: |
+            asan-sweep.log
+            build-asan/tests/**/Testing/Temporary/*.log
+          if-no-files-found: ignore
+          retention-days: 14

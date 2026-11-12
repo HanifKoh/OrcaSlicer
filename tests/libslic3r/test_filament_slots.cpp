@@ -1,6 +1,8 @@
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <boost/algorithm/string/join.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <map>
@@ -1036,4 +1038,183 @@ TEST_CASE("Reordering the filament slots renumbers a plate's print sequences", "
     CHECK(plate.option<ConfigOptionInts>("first_layer_print_sequence")->values == std::vector<int>{ 4, 1, 2, 3 });
     // The layer ranges stay; the filaments follow their slots.
     CHECK(plate.option<ConfigOptionInts>("other_layers_print_sequence")->values == std::vector<int>{ 2, 5, 4, 1, 2, 3, 6, 9, 3, 4, 2, 1 });
+}
+
+// ============================================================================
+// Slot arrays of the wrong length: each writer of the slot list starts from, or is handed, slot arrays
+// that are empty, one entry, one short or one long, and must leave every one at the slot count.
+// ============================================================================
+
+namespace {
+
+// Each slot array's length next to the slot count, for a failed consistency check.
+std::string slot_lengths(const PresetBundle &bundle)
+{
+    std::string out = "slots " + std::to_string(bundle.num_filament_slots());
+    for (const std::string &key : PresetBundle::filament_slot_keys()) {
+        const auto *opt = dynamic_cast<const ConfigOptionVectorBase *>(bundle.project_config.option(key));
+        out += ", " + key + " " + (opt != nullptr ? std::to_string(opt->size()) : std::string("absent"));
+    }
+    return out + ", ams_multi_color_filment " + std::to_string(bundle.ams_multi_color_filment.size());
+}
+
+// Resize one slot array of the bundle, the AMS colour list included, to `len` entries.
+void resize_slot_array(PresetBundle &bundle, const std::string &key, size_t len)
+{
+    if (key == "ams_multi_color_filment")
+        bundle.ams_multi_color_filment.resize(len, { "#FF0000" });
+    else
+        static_cast<ConfigOptionVectorBase *>(bundle.project_config.option(key))->resize(len);
+}
+
+// A printer and a filament preset for load_selections to find.
+void add_selection_presets(PresetBundle &bundle)
+{
+    bundle.printers.load_preset(std::string(), "Test Printer", DynamicPrintConfig(bundle.printers.default_preset().config), false);
+    bundle.filaments.load_preset(std::string(), "Filament A", DynamicPrintConfig(bundle.filaments.default_preset().config), false);
+}
+
+std::vector<std::string> slot_arrays_and_ams_list()
+{
+    std::vector<std::string> keys = PresetBundle::filament_slot_keys();
+    keys.emplace_back("ams_multi_color_filment");
+    return keys;
+}
+
+// Load `trays` AMS trays of one PLA and sync the bundle onto them, overwriting the slots or writing their colours only.
+void sync_onto_trays(PresetBundle &bundle, int trays, bool colour_only)
+{
+    for (int slot = 0; slot < trays; ++slot) {
+        DynamicPrintConfig tray;
+        tray.set_key_value("filament_id", new ConfigOptionStrings{ "GFA00" });
+        tray.set_key_value("filament_colour", new ConfigOptionStrings{ "#FF0000" });
+        tray.set_key_value("filament_colour_type", new ConfigOptionStrings{ "1" });
+        tray.set_key_value("filament_multi_colour", new ConfigOptionStrings{});
+        tray.set_key_value("ams_id", new ConfigOptionStrings{ "0" });
+        tray.set_key_value("slot_id", new ConfigOptionStrings{ std::to_string(slot) });
+        tray.set_key_value("filament_type", new ConfigOptionStrings{ "PLA" });
+        bundle.filament_ams_list.emplace(slot, std::move(tray));
+    }
+    std::vector<std::pair<DynamicPrintConfig *, std::string>> unknowns;
+    std::map<int, AMSMapInfo>                                 maps;
+    MergeFilamentInfo                                         merge_info;
+    bundle.sync_ams_list(unknowns, false, maps, true, merge_info, colour_only);
+}
+
+} // namespace
+
+// Grow, shrink and insert run every slot array through one resize, and the physical count call through the
+// normaliser, so they repair a mis-sized one.
+TEST_CASE("Growing, shrinking or inserting a slot brings a slot array of the wrong length back to the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep]")
+{
+    struct Writer { const char *name; void (*run)(PresetBundle &); };
+    const Writer writers[] = {
+        { "set_num_filaments(4)",          [](PresetBundle &b) { b.set_num_filaments(4u); } },
+        { "set_num_filaments(2)",          [](PresetBundle &b) { b.set_num_filaments(2u); } },
+        { "insert_filament_slot(1)",       [](PresetBundle &b) { b.insert_filament_slot(1); } },
+        { "set_num_physical_filaments(4)", [](PresetBundle &b) { b.set_num_physical_filaments(4); } },
+        { "set_num_physical_filaments(2)", [](PresetBundle &b) { b.set_num_physical_filaments(2); } },
+    };
+    for (const std::string &key : slot_arrays_and_ams_list())
+        for (size_t len : { 0, 1, 2, 4 })
+            for (const Writer &writer : writers)
+                DYNAMIC_SECTION(key << " at " << len << " of 3, then " << writer.name) {
+                    PresetBundle bundle;
+                    bundle.set_num_filaments(3u, "#FF0000");
+                    resize_slot_array(bundle, key, len);
+                    writer.run(bundle);
+                    INFO(slot_lengths(bundle));
+                    CHECK(bundle.filament_slots_consistent());
+                }
+}
+
+// update_num_filaments erases one entry from each array and ends in the top-up, whose normalise brings an array that
+// was the wrong length back to the slot count.
+TEST_CASE("Deleting a slot brings a slot array of the wrong length back to the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep]")
+{
+    for (const std::string &key : slot_arrays_and_ams_list())
+        for (size_t len : { 0, 1, 2, 4 })
+            for (unsigned int deleted : { 0u, 1u, 2u })
+                DYNAMIC_SECTION(key << " at " << len << " of 3, then update_num_filaments(" << deleted << ")") {
+                    PresetBundle bundle;
+                    bundle.set_num_filaments(3u, "#FF0000");
+                    resize_slot_array(bundle, key, len);
+                    bundle.update_num_filaments(deleted);
+                    INFO(slot_lengths(bundle));
+                    CHECK(bundle.filament_slots_consistent());
+                }
+}
+
+// The project load sizes every slot array to the file's filament count, read from filament_colour, and normalises
+// before it returns.
+TEST_CASE("Loading a project with a short, long or absent slot array leaves every slot array at the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep]")
+{
+    for (const std::string &key : PresetBundle::filament_slot_keys())
+        for (int len : { -1, 0, 1, 2, 4 }) // -1: the project does not carry the key
+            DYNAMIC_SECTION(key << (len < 0 ? std::string(" absent") : " at " + std::to_string(len) + " of 3")) {
+                DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+                config.option<ConfigOptionFloats>("filament_diameter", true)->values = { 1.75, 1.75, 1.75 };
+                config.option<ConfigOptionStrings>("filament_colour", true)->values  = { "#FF0000", "#00FF00", "#0000FF" };
+                for (const std::string &slot_key : PresetBundle::filament_slot_keys())
+                    if (slot_key != "filament_colour")
+                        static_cast<ConfigOptionVectorBase *>(config.option(slot_key, true))
+                            ->resize(3, print_config_def.get(slot_key)->default_value.get());
+                if (len < 0)
+                    config.erase(key);
+                else
+                    static_cast<ConfigOptionVectorBase *>(config.option(key))->resize(size_t(len));
+
+                PresetBundle bundle;
+                // The filament count is read from filament_colour, and a project without one is refused.
+                if (key == "filament_colour" && len <= 0) {
+                    CHECK_THROWS(bundle.load_config_model("test.3mf", std::move(config)));
+                } else {
+                    bundle.load_config_model("test.3mf", std::move(config));
+                    INFO(slot_lengths(bundle));
+                    CHECK(bundle.filament_slots_consistent());
+                }
+            }
+}
+
+// load_selections sizes the restored slot arrays to its preset list, the AMS colour list and a saved colour-pack list
+// of another length included.
+TEST_CASE("Restoring saved selections leaves every slot array at the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep]")
+{
+    for (const char *setting : { "filament_colors", "filament_multi_colors", "filament_color_types" })
+        for (size_t len : { 1, 2, 3, 4 })
+            DYNAMIC_SECTION(setting << " with " << len << " entries for 3 slots") {
+                PresetBundle bundle;
+                add_selection_presets(bundle);
+                AppConfig app_config;
+                app_config.set("presets", PRESET_PRINTER_NAME, "Test Printer");
+                app_config.set_printer_setting("Test Printer", PRESET_FILAMENT_NAME, "Filament A");
+                app_config.set_printer_setting("Test Printer", "filament_01", "Filament A");
+                app_config.set_printer_setting("Test Printer", "filament_02", "Filament A");
+                const std::vector<std::string> values(len, std::string(setting) == "filament_color_types" ? "1" : "#FF0000");
+                app_config.set_printer_setting("Test Printer", setting, boost::algorithm::join(values, ","));
+
+                bundle.load_selections(app_config);
+                INFO(slot_lengths(bundle));
+                CHECK(bundle.num_filament_slots() == 3);
+                CHECK(bundle.filament_slots_consistent());
+            }
+}
+
+// The AMS sync sizes every slot array to the synced slots, or writes a colour-only sync into the slots there are, and
+// normalises before it returns.
+TEST_CASE("An AMS sync onto a slot array of the wrong length leaves every slot array at the slot count", "[Preset][Bundle][FilamentSlots][MismatchSweep]")
+{
+    for (const std::string &key : slot_arrays_and_ams_list())
+        for (size_t len : { 0, 1, 2, 4 })
+            for (int trays : { 2, 3, 4 })
+                for (bool colour_only : { false, true }) {
+                    DYNAMIC_SECTION(key << " at " << len << " of 3, then a " << (colour_only ? "colour-only " : "") << "sync of " << trays << " trays") {
+                        PresetBundle bundle;
+                        bundle.set_num_filaments(3u, "#111111");
+                        resize_slot_array(bundle, key, len);
+                        sync_onto_trays(bundle, trays, colour_only);
+                        INFO(slot_lengths(bundle));
+                        CHECK(bundle.filament_slots_consistent());
+                    }
+                }
 }
