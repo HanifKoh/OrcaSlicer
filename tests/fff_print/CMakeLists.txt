@@ -4,6 +4,7 @@ add_executable(${_TEST_NAME}_tests
 	test_helpers.cpp
 	test_helpers.hpp
 	test_adaptive_pressure_advance.cpp
+	test_bridge.cpp
 	test_calib.cpp
 	test_cooling.cpp
 	test_extrusion_entity.cpp
@@ -20,6 +21,7 @@ add_executable(${_TEST_NAME}_tests
 	test_gcodewriter.cpp
 	test_imex_mode_gcode.cpp
 	test_imex_slice_offset.cpp
+	test_cardinality.cpp
 	test_model.cpp
 	test_multifilament.cpp
 	test_multimaterial_segmentation.cpp
