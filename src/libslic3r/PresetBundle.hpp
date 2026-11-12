@@ -471,8 +471,25 @@ public:
     std::map<int, int> take_pending_slot_relocations();
     // Next colour of the fixed palette: one sequence for every slot added without a colour.
     std::string     next_filament_colour();
+    // A slot array, ams_multi_color_filment included, whose length is not num_filament_slots().
+    struct FilamentSlotMismatch
+    {
+        std::string key;
+        size_t      length;
+    };
+    // The slot arrays out of step with the slot count, in filament_slot_keys() order; a missing option
+    // has length 0. Empty, and allocation-free, when the slots are consistent.
+    std::vector<FilamentSlotMismatch> filament_slot_mismatches() const;
     // True when every slot array holds exactly num_filament_slots() values.
-    bool            filament_slots_consistent() const;
+    bool            filament_slots_consistent() const { return filament_slot_mismatches().empty(); }
+    // Bring every slot array back to one value per slot when a writer left them out of step, logging
+    // each new mismatch once. A missing value is a physical slot's: in every array it goes ahead of the
+    // mixed tail, seeded as a new slot's. An extra one is dropped and logged. The bundle's entry points
+    // that rewrite the slot arrays call it before they return, and the nozzle-count top-up before it inserts.
+    void            normalize_filament_slots();
+    // How many times normalize_filament_slots() found the slots out of step, and what it found last.
+    size_t          filament_slot_repairs() const { return m_filament_slot_repairs; }
+    const std::vector<FilamentSlotMismatch> &last_filament_slot_repair() const { return m_last_filament_slot_repair; }
 
     void get_ams_cobox_infos(AMSComboInfo &combox_info);
     unsigned int sync_ams_list(std::vector<std::pair<DynamicPrintConfig *,std::string>> &unknowns, bool use_map, std::map<int, AMSMapInfo> &maps, bool enable_append, MergeFilamentInfo &merge_info, bool color_only = false);
@@ -763,6 +780,11 @@ private:
     void                resize_filament_slot_arrays(size_t n, const std::string &new_colour);
     std::map<int, int>  m_pending_slot_relocations;
     size_t              m_next_palette_colour = 0;
+    // normalize_filament_slots(): the repairs it made, the last one's findings, and the
+    // (key, length, slot count) mismatches it has logged.
+    size_t              m_filament_slot_repairs = 0;
+    std::vector<FilamentSlotMismatch> m_last_filament_slot_repair;
+    std::set<std::tuple<std::string, size_t, size_t>> m_logged_slot_mismatches;
 
     // Move the presets and vendor profiles of `others` into this bundle, in one pass
     // over each collection. A preset whose name this bundle or an earlier one of
